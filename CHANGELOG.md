@@ -3,7 +3,6 @@
 ## Unreleased (v1.1, planned)
 
 - **intercept** (block/mock/redirect network rules): live use hits a chromedp Fetch-event concurrency deadlock when an action triggers a matching paused request; the fix path is a dedicated second target context for fetch responses.
-- **Captcha solver integration**: challenge detection and auto-wait for managed challenges shipped in v1.0; image-captcha solving (reCAPTCHA grids, hCaptcha) via a paid solver (user-provided API key) plus token injection is next.
 - **Credential vault**: encrypted per-site credential storage (OS keychain) so the agent can log in to a fresh site without hand-fed passwords. (v1.0's persistent profile already covers the common "stay logged in" case.)
 
 ## v1.0.0 - 2026-06-19 (first release)
