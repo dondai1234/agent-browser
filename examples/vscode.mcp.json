@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "agent-browser": {
+      "command": "agent-browser",
+      "args": ["mcp"]
+    }
+  }
+}

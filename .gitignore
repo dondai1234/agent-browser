@@ -1,0 +1,16 @@
+# agent-browser build artifacts
+/agent-browser.exe
+/agent-browser
+/dist/
+*.log
+
+# Go
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# head-to-head / stray artifacts
+*.exe
+.playwright-mcp/
