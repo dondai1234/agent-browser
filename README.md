@@ -56,8 +56,9 @@ Copy this prompt into Claude Code, Cursor, Copilot Chat, Windsurf, or any agent 
 Install the agent-browser MCP server and connect it to this client:
 1. Run:  go install github.com/dondai1234/agent-browser@latest
 2. Verify:  agent-browser --version   (expect "agent-browser v1.0.0" or newer)
-3. Add a stdio MCP server named "agent-browser": command "agent-browser", args ["mcp"].
-4. Confirm it connects, then tell me it's ready.
+3. Find out which agent harnesa re you running on currently (Opencode, openclaw, hermes agent etc), Then find the MCP config for that harness.
+4. Add a stdio MCP server named "agent-browser": command "agent-browser", args ["mcp"].
+5. Confirm it connects, then tell me it's ready.
 ```
 
 ## Connect to your agent
