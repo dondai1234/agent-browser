@@ -13,6 +13,65 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// TestReliabilityNewTabSameBrowser proves the v2.0.3 NewTab fix: NewTab must
+// open a new tab on the EXISTING browser, not launch a second Chrome. Deriving
+// the new tab from s.browserCtx (whose Browser is nil because the launch runs on
+// the first tab) made chromedp think it was the first context + launch a second
+// Chrome; on a persistent profile that second Chrome hits the profile lock and
+// fails with "chrome failed to start" (the opencode "tabs new crashed" report).
+// We use a dedicated --user-data-dir so the first Chrome locks it; a buggy
+// NewTab would fail to start a second Chrome on that locked dir. The fix derives
+// the new tab from an existing tab's ctx (which carries the Browser).
+func TestReliabilityNewTabSameBrowser(t *testing.T) {
+	if os.Getenv("AGENT_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set AGENT_BROWSER_INTEGRATION=1 to run (needs Chrome + network)")
+	}
+	root := findModuleRoot(t)
+	bin := filepath.Join(t.TempDir(), "agent-browser-nt.exe")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/agent-browser")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	// A dedicated profile dir (not the default persistent one, not --no-persist).
+	// The first Chrome launch locks it; a buggy NewTab launching a second Chrome
+	// on the same dir would fail with "chrome failed to start".
+	profile := filepath.Join(t.TempDir(), "profile")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	client := mcp.NewClient(&mcp.Implementation{Name: "nt-client", Version: "v0.0.1"}, nil)
+	cmd := exec.Command(bin, "mcp", "--user-data-dir="+profile)
+	transport := &mcp.CommandTransport{Command: cmd}
+	sess, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { sess.Close(); cancel(); killProcTree(cmd) }()
+
+	call := func(name string, args map[string]any) string {
+		r, e := sess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if e != nil {
+			t.Fatalf("%s: %v", name, e)
+		}
+		return contentText(r)
+	}
+	call("navigate", map[string]any{"url": "https://example.com"})
+	newTab := call("tabs", map[string]any{"action": "new", "url": "https://go.dev"})
+	if strings.Contains(newTab, "chrome failed to start") || strings.Contains(strings.ToLower(newTab), "failed to start") {
+		t.Fatalf("tabs new launched a second Chrome (the regression) instead of a new tab on the existing browser: %q", newTab)
+	}
+	if !strings.Contains(newTab, "go.dev") {
+		t.Errorf("tabs new: expected the go.dev orientation, got: %q", newTab)
+	}
+	list := call("tabs", map[string]any{"action": "list"})
+	if !strings.Contains(list, "t1") || !strings.Contains(list, "t2") {
+		t.Errorf("tabs list after new: expected t1 + t2, got: %q", list)
+	}
+	if !strings.Contains(list, "go.dev") || !strings.Contains(list, "example.com") {
+		t.Errorf("tabs list: expected both pages present, got: %q", list)
+	}
+}
+
 // TestReliabilityProfileFallback proves the #1 fix for Dondai's reported
 // breakage: when Chrome can't start with the requested (persistent) profile -
 // locked by an orphaned Chrome, corrupted, or here an invalid path (a file not a

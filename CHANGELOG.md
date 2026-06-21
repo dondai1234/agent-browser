@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.0.3 - 2026-06-21 (reliability: the NewTab fix)
+
+v2.0.2 fixed the locked-profile crash, but a live opencode test then surfaced that **`tabs new` crashed the session** ("chrome failed to start"). Root cause: the v2.0.1 first-tab change made the first tab `NewContext(browserCtx)`, so chromedp set the `Browser` on the *first tab's* context, not on `browserCtx`. `NewTab` derived new tabs from `s.browserCtx` (whose `Browser` was nil), so chromedp thought each new tab was the "first" context and **launched a second Chrome** - which failed on the locked persistent profile.
+
+### The fix
+
+- **`NewTab` derives new tabs from an existing tab's context** (which carries the allocated `Browser`), not from `s.browserCtx`. So `NewContext` creates a new target on the existing browser instead of launching a second Chrome. One-line root-cause fix for the opencode "tabs new crashed" report.
+
+### Tests
+
+- New live test `TestReliabilityNewTabSameBrowser`: use a dedicated `--user-data-dir` (so the first Chrome locks it), then `tabs new` - a buggy NewTab launching a second Chrome on the locked dir fails with "chrome failed to start"; the fix opens a tab on the same browser. Negative-verified: reverting the fix makes the test fail with the exact opencode symptom.
+- Full live suite re-verified green (reliability + act/verdict/brief/history/qol). `govulncheck`: 0 reachable.
+
 ## v2.0.2 - 2026-06-21 (reliability: the server-crash fix)
 
 v2.0.1 bounded operations + added reset, but a live test on opencode surfaced a deeper bug: when the **persistent profile** (`<os config dir>/agent-browser`) is locked by an orphaned Chrome from a prior run, Chrome fails to start, and chromedp then **panics** (`close of closed channel` in `ExecAllocator.Allocate`) on the next op's retry - crashing the whole MCP server. Every tool then times out (the server is dead). This release makes launch + recovery bulletproof.

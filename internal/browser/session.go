@@ -311,9 +311,14 @@ func (s *Session) launchBrowserLocked() error {
 
 	// The first tab gets its own chromedp target (a child of the browser session),
 	// so cancelling it closes ONLY that tab - not the browser. (Reusing browserCtx
-	// as the first tab's ctx made t1.cancel == browserCancel, so reset/close of t1
-	// killed the whole browser.) An optional Timeout wraps the tab root (debug
-	// CLI); the MCP server leaves it long-lived.
+	// as the first tab's ctx made t1.cancel == browserCancel, so close/reset of t1
+	// killed the whole browser.) Its first CDP op (network.Enable in
+	// setupTabListeners) is what actually launches Chrome. NewTab later derives
+	// new tabs from an existing tab's ctx (which carries the allocated Browser),
+	// NOT from browserCtx - browserCtx's Browser stays nil because the launch runs
+	// on the tab, so NewContext(browserCtx) would wrongly launch a second Chrome.
+	// An optional Timeout wraps the tab root (debug CLI); the MCP server leaves it
+	// long-lived.
 	tabRootCtx := browserCtx
 	if cfg.Timeout > 0 {
 		var tcancel context.CancelFunc

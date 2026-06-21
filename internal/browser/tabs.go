@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+
 	"github.com/chromedp/chromedp"
 
 	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
@@ -44,7 +45,17 @@ func (s *Session) NewTab(url string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	newCtx, cancel := chromedp.NewContext(s.browserCtx)
+	// Derive the new tab from an existing tab's ctx (which carries the allocated
+	// Browser), NOT from s.browserCtx: browserCtx's Browser stays nil because the
+	// launch runs on the first tab, so NewContext(browserCtx) would think IT is
+	// the first context and launch a second Chrome ("chrome failed to start").
+	// Any live tab's ctx has the Browser, so NewContext here creates a new target
+	// on the same browser.
+	parent := s.curTabLocked()
+	if parent == nil {
+		return nil, errors.New("no tab to derive a new tab from")
+	}
+	newCtx, cancel := chromedp.NewContext(parent.ctx)
 	s.counter++
 	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel}
 	s.tabs = append(s.tabs, t)
