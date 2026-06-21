@@ -49,7 +49,16 @@ func (s *Session) NewTab(url string) (*snapshot.Tree, error) {
 	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel}
 	s.tabs = append(s.tabs, t)
 	s.cur = len(s.tabs) - 1
-	s.setupTabListenersLocked(t)
+	if err := s.setupTabListenersLocked(t); err != nil {
+		// The new tab's first CDP op failed (e.g. the browser died). Roll the tab
+		// back so the session isn't left pointing at a dead tab.
+		if t.cancel != nil {
+			t.cancel()
+		}
+		s.tabs = s.tabs[:len(s.tabs)-1]
+		s.cur = len(s.tabs) - 1
+		return nil, fmt.Errorf("new tab: %w", err)
+	}
 	if url != "" {
 		if err := s.run(t,
 			chromedp.Navigate(url),

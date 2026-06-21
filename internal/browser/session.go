@@ -85,6 +85,22 @@ type Session struct {
 	// times out (the "session hung, all tools timed out" failure mode).
 	opTimeout time.Duration
 
+	// dead is non-nil after a fatal browser error (chrome failed to start,
+	// the browser process crashed, the websocket dropped). Once set, run/runTimeout
+	// short-circuit: they return this error WITHOUT calling chromedp.Run, so a
+	// dead session is never retried. This is what prevents the chromedp panic:\t// Allocate double-closes c.allocated when a second Run retries after the
+	// first failed to start Chrome. Cleared by Reset (which relaunches the browser).
+	dead error
+
+	// cfg is the launch config, kept so Reset can relaunch the browser with the
+	// same flags (stealth/headless/profile/viewport/...).
+	cfg Config
+
+	// persistFallback is true when New fell back to a throwaway temp profile
+	// because the persistent profile was locked/corrupted (so logins won't survive
+	// a restart until the profile is freed/recreated).
+	persistFallback bool
+
 	// per-tab listener state.
 	dialogListening map[*tab]bool
 }
@@ -103,6 +119,14 @@ const opTimeoutDefault = 30 * time.Second
 // retry then gets a second attempt within the overall op budget).
 const axPollTimeout = 8 * time.Second
 
+// launchTimeout bounds the Chrome launch (the first CDP op on a fresh tab -
+// network.Enable in setupTabListeners - which is what actually starts Chrome).
+// It's separate from + longer than the op timeout so a slow Chrome cold-start
+// (antivirus scan, first-run profile setup, a heavy persistent profile) doesn't
+// fail New under a tight --op-timeout. The launch is one-time; regular ops use
+// op-timeout.
+const launchTimeout = 60 * time.Second
+
 // run executes CDP actions on the tab bounded by the per-operation timeout.
 // The timeout is enforced with a goroutine + select, NOT context.WithTimeout:
 // chromedp.Navigate registers a navigation listener tied to the chromedp
@@ -120,8 +144,19 @@ func (s *Session) run(t *tab, acts ...chromedp.Action) error {
 // runTimeout is run with an explicit timeout (used by the AX pulls, which want
 // a tighter bound than the op timeout so the build-tree retry fits in budget).
 func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) error {
+	// Never retry a dead session: a second chromedp.Run after the browser died
+	// re-enters Allocate, whose cmd.Wait goroutine double-closes c.allocated and
+	// panics (crashing the whole MCP process). Short-circuit instead, so the
+	// agent sees "use reset" instead of a crashed server.
+	if s.dead != nil {
+		return fmt.Errorf("browser session is dead (%v); use reset to relaunch it (or restart the MCP server)", s.dead)
+	}
 	if d <= 0 {
-		return chromedp.Run(t.ctx, acts...)
+		err := chromedp.Run(t.ctx, acts...)
+		if isFatalBrowserErr(err) {
+			s.dead = err
+		}
+		return err
 	}
 	type result struct{ err error }
 	done := make(chan result, 1)
@@ -140,10 +175,32 @@ func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) e
 	}()
 	select {
 	case r := <-done:
+		if isFatalBrowserErr(r.err) {
+			s.dead = r.err // mark dead so the next op short-circuits (no retry -> no panic)
+		}
 		return r.err
 	case <-time.After(d):
 		return fmt.Errorf("operation timed out after %s (the page may be wedged; use reset to recover, or raise --op-timeout for slow pages)", d)
 	}
+}
+
+// isFatalBrowserErr reports whether an error means the browser itself is gone
+// (not just a bad page or a timeout). Used to mark the session dead so a later
+// op doesn't retry chromedp.Run (which double-closes c.allocated and panics).
+// The op-timeout message is intentionally NOT fatal: a wedged page isn't a dead
+// browser, and the next op may still succeed (or the agent resets).
+func isFatalBrowserErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "chrome failed to start") ||
+		strings.Contains(m, "context canceled") ||
+		strings.Contains(m, "connection refused") ||
+		strings.Contains(m, "websocket is not connected") ||
+		strings.Contains(m, "not connected to browser") ||
+		strings.Contains(m, "target closed") ||
+		strings.Contains(m, "was not reached")
 }
 
 // historyEntry is one row of the session action log: what was done, the
@@ -174,25 +231,56 @@ type Config struct {
 	OpTimeout   time.Duration // per-CDP-operation timeout (default 30s); bounds any single chromedp.Run so a hung page can't wedge the session mutex + deadlock every tool. Raise for very slow pages.
 }
 
-// New launches Chrome and returns a Session with one initial tab.
+// New launches Chrome and returns a Session with one initial tab. If Chrome
+// can't start with the requested (persistent) profile - the profile is locked
+// by an orphaned Chrome from a prior run, or corrupted - it falls back to a
+// throwaway temp profile so the server still works (no persistence, but alive).
+// Without this fallback, a locked profile makes every tool fail with "chrome
+// failed to start" and the server is useless until the orphan is killed.
 func New(cfg Config) (*Session, error) {
+	s := &Session{cfg: cfg, stealth: cfg.Stealth, opTimeout: cfg.OpTimeout, dialogListening: map[*tab]bool{}}
+	if s.opTimeout <= 0 {
+		s.opTimeout = opTimeoutDefault
+	}
+	if err := s.launchBrowserLocked(); err != nil {
+		if cfg.UserDataDir != "" {
+			// The requested (persistent) profile wouldn't start Chrome - locked by
+			// an orphaned Chrome from a prior run, corrupted, or otherwise unusable
+			// (any launch error: "chrome failed to start", "websocket url timeout
+			// reached", ...). Fall back to a throwaway temp profile so the server
+			// still works (no persistence, but alive). Without this, a locked profile
+			// makes every tool fail + the chromedp double-close panic crashes the
+			// server once a later op retries Allocate.
+			s.teardownBrowserLocked()
+			s.cfg.UserDataDir = ""
+			s.dead = nil
+			if err2 := s.launchBrowserLocked(); err2 != nil {
+				return nil, fmt.Errorf("chrome failed to start (persistent profile: %v; temp profile fallback also failed: %w)", err, err2)
+			}
+			s.persistFallback = true
+		} else {
+			return nil, fmt.Errorf("launch browser: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// launchBrowserLocked builds the Chrome allocator + browser session + first tab
+// and runs the first CDP op (network.Enable in setupTabListeners), which is what
+// actually launches Chrome. Returns an error if Chrome fails to start. Called by
+// New and by Reset (after teardownBrowserLocked). Caller must hold s.mu.
+func (s *Session) launchBrowserLocked() error {
+	cfg := s.cfg
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
 	)
 	if cfg.Stealth {
-		// Drop --enable-automation (removes the "controlled by automated software"
-		// banner + the automation blink signal) and disable the
-		// AutomationControlled blink feature (sets navigator.webdriver=false at
-		// the engine level - more robust than a JS override). Table-stakes stealth.
 		opts = append(opts,
 			chromedp.Flag("enable-automation", false),
 			chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		)
 	}
-	// Modern "new" headless has a near-real fingerprint; headed uses the real
-	// GPU (best render/timing fingerprint) - prefer --headless=false for hard
-	// targets when a display is available.
 	if cfg.Headless {
 		opts = append(opts, chromedp.Flag("headless", "new"))
 	} else {
@@ -217,27 +305,15 @@ func New(cfg Config) (*Session, error) {
 	opts = append(opts, chromedp.WindowSize(w, h))
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-
-	s := &Session{
-		allocCancel:     allocCancel,
-		browserCtx:      browserCtx,
-		browserCancel:   browserCancel,
-		stealth:         cfg.Stealth,
-		opTimeout:       cfg.OpTimeout,
-		dialogListening: map[*tab]bool{},
-		counter:         1,
-	}
-	if s.opTimeout <= 0 {
-		s.opTimeout = opTimeoutDefault
-	}
+	s.allocCancel = allocCancel
+	s.browserCtx = browserCtx
+	s.browserCancel = browserCancel
 
 	// The first tab gets its own chromedp target (a child of the browser session),
-	// so cancelling it closes ONLY that tab - not the browser. The old code reused
-	// browserCtx as the first tab's ctx, making t1.cancel == browserCancel: a
-	// reset/close of the first tab killed the whole browser (then every later op
-	// errored "context canceled"). The browser session itself is cancelled only
-	// in Close. An optional Timeout wraps the tab root (debug CLI); the MCP
-	// server leaves it long-lived.
+	// so cancelling it closes ONLY that tab - not the browser. (Reusing browserCtx
+	// as the first tab's ctx made t1.cancel == browserCancel, so reset/close of t1
+	// killed the whole browser.) An optional Timeout wraps the tab root (debug
+	// CLI); the MCP server leaves it long-lived.
 	tabRootCtx := browserCtx
 	if cfg.Timeout > 0 {
 		var tcancel context.CancelFunc
@@ -245,10 +321,35 @@ func New(cfg Config) (*Session, error) {
 		_ = tcancel // fires on timeout; browserCancel in Close also cancels it
 	}
 	firstCtx, firstCancel := chromedp.NewContext(tabRootCtx)
+	s.counter = 1
 	s.tabs = []*tab{{id: "t1", ctx: firstCtx, cancel: firstCancel}}
-	s.setupTabListenersLocked(s.tabs[0])
-	return s, nil
+	s.cur = 0
+	s.dialogListening = map[*tab]bool{}
+	return s.setupTabListenersLocked(s.tabs[0])
 }
+
+// teardownBrowserLocked cancels the allocator + browser session + all tabs, so a
+// failed launch (or a Reset) releases the Chrome process + chromedp goroutines
+// before a fresh launch. Caller must hold s.mu.
+func (s *Session) teardownBrowserLocked() {
+	for _, t := range s.tabs {
+		if t.cancel != nil {
+			t.cancel()
+		}
+	}
+	s.tabs = nil
+	if s.browserCancel != nil {
+		s.browserCancel()
+	}
+	if s.allocCancel != nil {
+		s.allocCancel()
+	}
+}
+
+// PersistFallback reports whether New fell back to a throwaway temp profile
+// because the requested persistent profile was locked/corrupted. The operator
+// can log it so the user knows persistence is off until the profile is freed.
+func (s *Session) PersistFallback() bool { return s.persistFallback }
 
 // Close shuts down the browser.
 func (s *Session) Close() {
@@ -540,23 +641,34 @@ func (s *Session) resolveRefLocked(ctx context.Context, ref string) (runtime.Rem
 
 // setupTabListenersLocked installs per-tab event listeners: JS dialog
 // auto-accept AND a read-only network listener (XHR/Fetch responses) that
-// feeds the verdict's "net:" signal. Idempotent per tab. Caller must hold s.mu.
+// feeds the verdict's "net:" signal. Idempotent per tab. Returns the error from
+// the network.Enable op (the first CDP call on a fresh tab - this is what
+// actually launches Chrome, so its error tells New whether Chrome started).
+// Caller must hold s.mu.
 //
 // The network listener is read-only (it observes ResponseReceived events) - it
 // does NOT pause requests (the Fetch-domain pausing that deadlocked the v1
 // intercept feature). It only appends to a per-tab ring under the tab's own
 // netMu, so the listener goroutine never re-enters chromedp.Run and cannot
 // deadlock the action path.
-func (s *Session) setupTabListenersLocked(t *tab) {
+func (s *Session) setupTabListenersLocked(t *tab) error {
 	if t == nil || s.dialogListening[t] {
-		return
+		return nil
 	}
 	s.dialogListening[t] = true
 	chromedp.ListenTarget(t.ctx, func(ev any) {
 		switch e := ev.(type) {
 		case *page.EventJavascriptDialogOpening:
+			// Dismiss the dialog in a goroutine. This does NOT use s.run: the
+			// listener goroutine doesn't hold s.mu, so touching s.dead from here
+			// would race, and a failed dismiss on a dying tab must NOT mark the
+			// whole session dead. WithTimeout is safe here (HandleJavaScriptDialog
+			// isn't a Navigate, so the chromedp Navigate-context quirk doesn't
+			// apply).
 			go func() {
-				_ = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(t.ctx, 10*time.Second)
+				defer cancel()
+				_ = chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 					return page.HandleJavaScriptDialog(true).Do(ctx)
 				}))
 			}()
@@ -577,9 +689,12 @@ func (s *Session) setupTabListenersLocked(t *tab) {
 			t.netMu.Unlock()
 		}
 	})
-	// Enable the Network domain so ResponseReceived events fire. Best-effort:
-	// a failure here just means no net: signal, not a broken session.
-	_ = s.run(t, network.Enable())
+	// Enable the Network domain so ResponseReceived events fire. This is the
+	// first CDP op on the tab - i.e. the moment Chrome actually launches - so its
+	// error (e.g. "chrome failed to start" on a locked profile) propagates to New.
+	// Use the generous launch timeout, not the per-op timeout, so a slow Chrome
+	// cold-start doesn't fail New under a tight --op-timeout.
+	return s.runTimeout(t, launchTimeout, network.Enable())
 }
 
 // recentNetLocked returns the XHR/Fetch responses received on this tab since
@@ -750,13 +865,17 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	return cur.tree, nil
 }
 
-// Reset is the recovery path: it drops the current tab (cancelling its ctx,
-// which force-unblocks any hung CDP call on it - chromedp.Run returns ctx.Err)
-// and opens a fresh one, navigating to url if non-empty. Use when a page has
-// wedged the tab (a tool returned an op-timeout error, or the page is a dead
-// SPA). Other tabs are kept. Bounded by the op timeout like every action, so
-// reset itself can't wedge. Returns the new tab's orientation, or an error if
-// the browser itself is dead (restart the server in that case).
+// Reset is the recovery path: it tears down the whole browser (every tab + the
+// Chrome process + the chromedp session) and relaunches a fresh one, navigating
+// to url if non-empty. Use it when a tool returned an op-timeout or "browser
+// session is dead" error, or a page is an unresponsive SPA. A full relaunch
+// (not just a new tab) is what makes reset bulletproof: it recovers from a
+// wedged TAB and from a crashed BROWSER (a plain new-tab reset can't, because the
+// dead browser session can't accept a new target). The cost is that other tabs
+// are lost - acceptable for a recovery scenario (if your browser crashed, those
+// tabs were gone anyway). Bounded by the op timeout like every action.
+// Returns the new tab's orientation, or an error if Chrome itself can't start
+// (restart the MCP server in that case).
 func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 	if url != "" {
 		clean, err := ValidateURL(url, s.AllowInsecureSchemes)
@@ -767,29 +886,16 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Cancel + drop the current tab. Cancelling its ctx unblocks a hung CDP call
-	// on it even if a prior op is still mid-flight on this tab (the wedge release).
-	if cur := s.curTabLocked(); cur != nil {
-		if cur.cancel != nil {
-			cur.cancel()
-		}
-		if len(s.tabs) == 1 {
-			s.tabs = s.tabs[:0]
-			s.cur = 0
-		} else {
-			s.tabs = append(s.tabs[:s.cur], s.tabs[s.cur+1:]...)
-			if s.cur >= len(s.tabs) {
-				s.cur = len(s.tabs) - 1
-			}
-		}
+	// Tear down the old browser entirely (tabs + session + allocator) so the
+	// Chrome process exits + chromedp goroutines stop, then relaunch fresh.
+	s.teardownBrowserLocked()
+	s.dead = nil
+	if err := s.launchBrowserLocked(); err != nil {
+		s.dead = err
+		s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
+		return nil, fmt.Errorf("reset: launch browser: %w", err)
 	}
-	// Fresh tab as current.
-	newCtx, cancel := chromedp.NewContext(s.browserCtx)
-	s.counter++
-	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel}
-	s.tabs = append(s.tabs, t)
-	s.cur = len(s.tabs) - 1
-	s.setupTabListenersLocked(t)
+	t := s.curTabLocked()
 	action := "reset (blank tab)"
 	if url != "" {
 		action = "reset -> " + url
@@ -814,7 +920,7 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 			}
 		}
 	}
-	s.recordHistoryLocked(action, "reset: fresh tab opened", url)
+	s.recordHistoryLocked(action, "reset: browser relaunched", url)
 	return s.curTabLocked().tree, nil
 }
 

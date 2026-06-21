@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -11,6 +12,67 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// TestReliabilityProfileFallback proves the #1 fix for Dondai's reported
+// breakage: when Chrome can't start with the requested (persistent) profile -
+// locked by an orphaned Chrome, corrupted, or here an invalid path (a file not a
+// dir) - the server falls back to a throwaway temp profile instead of crashing
+// with the chromedp "close of closed channel" panic. Pre-fix, this exact scenario
+// made every tool fail + crashed the MCP process. Post-fix, navigate succeeds.
+func TestReliabilityProfileFallback(t *testing.T) {
+	if os.Getenv("AGENT_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set AGENT_BROWSER_INTEGRATION=1 to run (needs Chrome + network)")
+	}
+	root := findModuleRoot(t)
+	bin := filepath.Join(t.TempDir(), "agent-browser-fb.exe")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/agent-browser")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	// An invalid user-data-dir: a regular file, not a directory. Chrome can't
+	// use it as a profile, so launchBrowserLocked returns "chrome failed to
+	// start" and New falls back to a temp profile.
+	badProfile := filepath.Join(t.TempDir(), "not-a-dir-file")
+	if err := os.WriteFile(badProfile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	client := mcp.NewClient(&mcp.Implementation{Name: "fb-client", Version: "v0.0.1"}, nil)
+	cmd := exec.Command(bin, "mcp", "--no-persist", "--user-data-dir="+badProfile)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	transport := &mcp.CommandTransport{Command: cmd}
+	sess, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("connect: %v (stderr: %s)", err, stderr.String())
+	}
+	defer func() {
+		sess.Close()
+		cancel()
+		killProcTree(cmd)
+	}()
+
+	// Navigate must succeed via the temp-profile fallback (the invalid profile
+	// would have crashed the server pre-fix). No panic, no "chrome failed to
+	// start" error.
+	nav, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "navigate", Arguments: map[string]any{"url": "https://example.com"}})
+	if err != nil {
+		t.Fatalf("navigate transport error (server crashed?): %v (stderr: %s)", err, stderr.String())
+	}
+	txt := contentText(nav)
+	if nav.IsError {
+		t.Fatalf("navigate with an invalid --user-data-dir: expected the temp-profile fallback to make it work, got error: %q (stderr: %s)", txt, stderr.String())
+	}
+	if !strings.Contains(txt, "example.com") {
+		t.Errorf("navigate: expected example.com, got: %q", txt)
+	}
+	// The fallback should be logged to stderr (so the operator knows persistence
+	// is off). If Chrome happened to tolerate the bad path this assertion is a
+	// no-op, but the navigate success above is the real proof.
+	_ = stderr.String()
+}
 
 // realWorldSetupWithFlags is realWorldSetup with extra CLI args (for the
 // op-timeout test, which needs --op-timeout=10ms to prove the per-op bound

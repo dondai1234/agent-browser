@@ -118,6 +118,9 @@ func runMCP(args []string) {
 		log.Fatalf("new session: %v", err)
 	}
 	defer sess.Close()
+	if sess.PersistFallback() {
+		log.Printf("agent-browser: the persistent profile (%s) was locked or corrupted (likely a leftover Chrome from a prior run), so this session is using a throwaway temp profile. Logins/cookies will NOT survive a restart until the profile is freed. Kill any leftover agent-browser Chrome processes (Task Manager -> chrome.exe owned by agent-browser) to restore persistence.", userDataDir)
+	}
 	sess.AllowInsecureSchemes = *allowInsecure
 	sess.AllowEval = !*noEval
 

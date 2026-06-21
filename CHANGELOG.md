@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.0.2 - 2026-06-21 (reliability: the server-crash fix)
+
+v2.0.1 bounded operations + added reset, but a live test on opencode surfaced a deeper bug: when the **persistent profile** (`<os config dir>/agent-browser`) is locked by an orphaned Chrome from a prior run, Chrome fails to start, and chromedp then **panics** (`close of closed channel` in `ExecAllocator.Allocate`) on the next op's retry - crashing the whole MCP server. Every tool then times out (the server is dead). This release makes launch + recovery bulletproof.
+
+### The crash + the fix
+
+- **Persistent -> temp profile fallback**: if Chrome can't start with the requested persistent profile (locked by an orphan, corrupted, or any launch error - "chrome failed to start", "websocket url timeout reached", ...), `New` tears that attempt down + relaunches with a throwaway temp profile so the server still works (no persistence, but alive). A stderr log line tells the operator persistence is off + how to restore it (kill leftover agent-browser Chrome processes). Without this, a locked profile made every tool fail.
+- **Dead-session guard (the chromedp panic fix)**: a fatal browser error (chrome failed to start, the process crashed, the websocket dropped) now marks the session `dead`. `run`/`runTimeout` short-circuit on a dead session - they return the error WITHOUT calling `chromedp.Run`, so a dead browser is never retried. The panic was chromedp double-closing `c.allocated` when a second `Run` retried `Allocate` after the first failed; never retrying = no double-close = no crash.
+- **`reset` is now a full browser relaunch** (not just a new tab): it tears down the whole browser + relaunches Chrome, so it recovers from a wedged TAB and from a crashed BROWSER (a new-tab reset can't - the dead session won't accept a new target). Other tabs are lost (acceptable for recovery). Bounded by the op timeout.
+- **Launch timeout is separate from the op timeout** (60s): the Chrome cold-start (the first CDP op) gets its own generous budget so a slow launch (antivirus, first-run profile setup, a heavy persistent profile) doesn't fail `New` under a tight `--op-timeout`.
+- **First-tab cancel no longer kills the browser** (from v2.0.1, retained): the first tab gets its own chromedp target, so `reset`/`close` on t1 closes only that tab.
+
+### Also in this release
+
+- The dialog auto-accept handler no longer goes through `run` (it ran in a listener goroutine without the session lock, which would have raced on the dead flag + could wrongly mark the session dead on a closing tab).
+
+### Tests
+
+- New live test `TestReliabilityProfileFallback`: launch the server with an invalid `--user-data-dir` (a file, not a dir) so Chrome can't start, assert the temp-profile fallback makes navigate succeed (pre-fix this crashed the server).
+- All v2.0.1 reliability tests re-verified green (op-timeout, reset, combobox, press_key, tab-switch) + the existing live suite (act login, verdict, qol back/forward). `govulncheck`: 0 reachable.
+
 ## v2.0.1 - 2026-06-21 (reliability)
 
 v2.0.0 could wedge: a single hung CDP call (a page that never finishes loading, a mid-navigation execution-context teardown, a challenge that stalls) held the session mutex forever, and EVERY tool then blocked on the lock until the MCP client timed out - the "session hung, all tools timed out" failure. This release bounds every operation, fixes the correctness gaps a live agent test surfaced, and adds an explicit recovery path.

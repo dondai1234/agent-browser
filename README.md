@@ -118,7 +118,7 @@ Name the control, get a verdict. You rarely call `see` after an action - the ver
 
 ## Tools (20)
 
-`navigate` (open/back/forward/reload) · `see` (brief/minimal/summary/full) · `find` · `extract` (table/links/list/form/article) · `read` (link refs include `href`) · `click` · `act` (intent-first) · `fill` (single or `{ref:value}` map) · `select` · `scroll` (by pixels or `ref`; reports position) · `wait` (url/text/gone conditions) · `screenshot` (viewport/fullPage/ref) · `eval` · `tabs` · `upload` · `press_key` · `hover` · `history` · `where` · `reset` (drop a wedged tab + open a fresh one)
+`navigate` (open/back/forward/reload) · `see` (brief/minimal/summary/full) · `find` · `extract` (table/links/list/form/article) · `read` (link refs include `href`) · `click` · `act` (intent-first) · `fill` (single or `{ref:value}` map) · `select` · `scroll` (by pixels or `ref`; reports position) · `wait` (url/text/gone conditions) · `screenshot` (viewport/fullPage/ref) · `eval` · `tabs` · `upload` · `press_key` · `hover` · `history` · `where` · `reset` (relaunch the browser - recover from a wedged tab or a crashed browser)
 
 Every tool's description is hand-crafted to tell the agent exactly what to pass, what it returns, and the gotcha. `act` resolves by name with local heuristics (no LLM); `press_key` fires native key events (Enter submits a form); `hover` triggers CSS `:hover`; `select` matches an option's value *or* visible text; `scroll` tells you whether to keep scrolling; `eval` covers anything the typed tools can't expose (canvas, computed state, history, cookies, console errors).
 
@@ -142,7 +142,7 @@ Every tool's description is hand-crafted to tell the agent exactly what to pass,
 
 ## Flags
 
-`--headless` · `--user-data-dir` (override the profile location) · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/agent-browser`) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-eval` (eval is on by default) · `--allow-insecure-schemes` · `--version`
+`--headless` · `--user-data-dir` (override the profile location) · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/agent-browser`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-eval` (eval is on by default) · `--op-timeout` (per-CDP-op timeout, default 30s) · `--allow-insecure-schemes` · `--version`
 
 ## Status
 
