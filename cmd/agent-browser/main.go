@@ -79,6 +79,7 @@ func runMCP(args []string) {
 	noStealth := fs.Bool("no-stealth", false, "disable anti-detection (stealth flags + init script + jittered mouse); on by default")
 	allowInsecure := fs.Bool("allow-insecure-schemes", false, "allow file/javascript/data/about/blob URLs")
 	noEval := fs.Bool("no-eval", false, "disable the eval tool (arbitrary page JS; enabled by default)")
+	opTimeout := fs.Duration("op-timeout", 30*time.Second, "per-CDP-operation timeout: bounds any single browser call so a hung page returns an error instead of wedging the session (the 'all tools timed out' failure). Raise for very slow pages.")
 	versionFlag := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(args)
 	if *versionFlag {
@@ -112,7 +113,7 @@ func runMCP(args []string) {
 			h = b
 		}
 	}
-	sess, err := browser.New(browser.Config{Headless: *headless, UserDataDir: userDataDir, Proxy: *proxy, UserAgent: *userAgent, ViewportW: w, ViewportH: h, Stealth: !*noStealth}) // 0 = long-lived session
+	sess, err := browser.New(browser.Config{Headless: *headless, UserDataDir: userDataDir, Proxy: *proxy, UserAgent: *userAgent, ViewportW: w, ViewportH: h, Stealth: !*noStealth, OpTimeout: *opTimeout}) // 0 = long-lived session
 	if err != nil {
 		log.Fatalf("new session: %v", err)
 	}
@@ -121,7 +122,7 @@ func runMCP(args []string) {
 	sess.AllowEval = !*noEval
 
 	opts := &mcp.ServerOptions{
-		Instructions: "agent-browser v2: token-efficient browser automation built for the agent. ORIENT: navigate/see level=brief -> a page brief (type, auth, primary actions with refs, regions); level=summary -> the ref list. ACT BY INTENT: act \"Sign in\" or act \"Username\" value=x resolves a control by name (local heuristics, no LLM) and clicks/fills it in one call; several matches -> it returns candidates (disambiguate with nth/role). Every action returns a VERDICT (navigated to / dialog opened / status / changed / no visible effect / CHALLENGE) + a DELTA (what changed, fresh refs) so you rarely re-see; non-nav actions also fold in the XHRs that fired (net:). EXTRACT: extract table/links/list/form/article -> JSON (form gives {ref,role,name,value} to feed act/fill). RECALL: history -> the session action log, offloaded from your context. WAIT: wait url=/text=/gone=. FILL: fill fields={ref:value} for a whole form. By-ref tools (click/fill/select/hover/press_key) work when you have a ref. Refs are per-tab, reset on navigation. QoL: navigate action=back/forward/reload for history + refresh; scroll ref=r12 to bring an off-screen element into view; read on a link ref also returns its href; screenshot fullPage=true or ref=r12 for whole-page or single-element captures; where for a 30-token re-orientation when you lose your place. eval covers the rest.",
+		Instructions: "agent-browser v2: token-efficient browser automation built for the agent. ORIENT: navigate/see level=brief -> a page brief (type, auth, primary actions with refs, regions); level=summary -> the ref list. ACT BY INTENT: act \"Sign in\" or act \"Username\" value=x resolves a control by name (local heuristics, no LLM) and clicks/fills it in one call; several matches -> it returns candidates (disambiguate with nth/role). Every action returns a VERDICT (navigated to / dialog opened / status / changed / no visible effect / CHALLENGE) + a DELTA (what changed, fresh refs) so you rarely re-see; non-nav actions also fold in the XHRs that fired (net:). EXTRACT: extract table/links/list/form/article -> JSON (form gives {ref,role,name,value} to feed act/fill). RECALL: history -> the session action log, offloaded from your context. WAIT: wait url=/text=/gone=. FILL: fill fields={ref:value} for a whole form. By-ref tools (click/fill/select/hover/press_key) work when you have a ref. press_key takes ONE named key or ONE char (Enter, Escape, a) - to type text use fill/act, not press_key. Refs are per-tab, reset on navigation. QoL: navigate action=back/forward/reload; scroll ref=r12 to bring an off-screen element into view; read on a link ref also returns its href; screenshot fullPage=true or ref=r12; where for a 30-token re-orientation. RECOVER: reset (optional url) drops a wedged tab + opens a fresh one when a tool times out or a page is unresponsive; other tabs are kept. Every browser op is bounded by an op timeout (default 30s) so a hung page returns an error instead of wedging the whole session. eval covers the rest.",
 	}
 	srv, err := mcpserver.New(sess, opts)
 	if err != nil {

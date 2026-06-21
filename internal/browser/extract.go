@@ -95,7 +95,7 @@ func (s *Session) Extract(kind string) (string, error) {
 		js = extractArticleJS
 	}
 	var raw string
-	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 		// ReturnByValue so arrays/objects serialize into res.Value (the known
 		// chromedp quirk: without it, array returns don't come back).
 		res, exc, err := runtime.Evaluate(js).WithReturnByValue(true).Do(ctx)

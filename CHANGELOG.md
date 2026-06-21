@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.0.1 - 2026-06-21 (reliability)
+
+v2.0.0 could wedge: a single hung CDP call (a page that never finishes loading, a mid-navigation execution-context teardown, a challenge that stalls) held the session mutex forever, and EVERY tool then blocked on the lock until the MCP client timed out - the "session hung, all tools timed out" failure. This release bounds every operation, fixes the correctness gaps a live agent test surfaced, and adds an explicit recovery path.
+
+### Reliability (the wedge fix)
+
+- **Per-operation timeout** (`--op-timeout`, default 30s): every CDP call is bounded. A hung page returns a timeout error + releases the session lock instead of wedging every tool. Implemented with a goroutine + select (not `context.WithTimeout`, which breaks `chromedp.Navigate`'s navigation listener with a spurious "context canceled"). A genuinely wedged op leaks a goroutine until the tab is reset/closed.
+- **`reset` tool**: the explicit recovery path the agent asked for ("no session management - no close/reset when it hangs"). Drops the current tab (cancelling any hung op on it) + opens a fresh one at an optional URL; other tabs are kept. Pairs with the op timeout - the timeout guarantees the lock is released, reset cleans up.
+- **First-tab cancel no longer kills the browser**: the first tab now gets its own chromedp target (like `new tab`), so `reset`/`close` on t1 closes only that tab. Previously t1's cancel was the browser cancel, so resetting or closing the first tab tore down the whole browser (then every later op errored "context canceled"). This also fixes a latent `close t1` bug.
+
+### Correctness fixes (from a live OpenCode agent test)
+
+- **`act` on an ARIA combobox** (Google search, autocomplete widgets): a `combobox` role over a `<textarea>` has no `<option>`s, so the old `selectJS` no-op'd on it and the agent had to fall back to `eval`. `act` now probes the tag - native `<select>` -> select the option; ARIA combobox (textarea/input) -> fill (the native value setter + input/change that React/Vue autocompletes actually listen for).
+- **`press_key` multi-char silent no-op**: `press_key key="weather in tokyo"` dispatched a useless keyDown with a multi-char key string (no native default, inserts nothing) and the agent couldn't tell. `press_key` now rejects anything that isn't a named key or a single character, with an error that redirects to `fill`/`act` for typing text.
+- **`tabs switch`/`close` by label**: the handler passed only `id` to `SwitchTab`/`CloseTab`, so `switch label=<name>` silently failed. Both now accept the `label` field as a fallback when `id` is empty.
+
+### Tests
+
+- 5 new live reliability tests (gated by `AGENT_BROWSER_INTEGRATION=1`): op-timeout bound fires + session not wedged after; `reset` drops + reopens a working tab; ARIA combobox is filled not selected; `press_key` rejects a multi-char key; `tabs switch`/`close` by label works.
+- New unit test `TestValidateKeyPress` (runs in CI): the press_key input rule without a browser.
+- Existing live suite re-verified green (act/verdict/brief/history/qol/scroll/extract/net) - no regression from the `run` wrapper or the first-tab change.
+- `govulncheck`: 0 reachable vulnerabilities.
+
 ## Unreleased (v2.1, planned)
 
 - **intercept** (block/mock/redirect network rules): live use hits a chromedp Fetch-event concurrency deadlock when an action triggers a matching paused request; the fix path is a dedicated second target context for fetch responses.

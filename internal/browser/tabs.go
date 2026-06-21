@@ -51,7 +51,7 @@ func (s *Session) NewTab(url string) (*snapshot.Tree, error) {
 	s.cur = len(s.tabs) - 1
 	s.setupTabListenersLocked(t)
 	if url != "" {
-		if err := chromedp.Run(t.ctx,
+		if err := s.run(t,
 			chromedp.Navigate(url),
 			chromedp.WaitReady("body", chromedp.ByQuery),
 		); err != nil {

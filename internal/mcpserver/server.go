@@ -1,6 +1,6 @@
-// Package mcpserver wires the browser.Session into an MCP server: 19 tools
+// Package mcpserver wires the browser.Session into an MCP server: 20 tools
 // (navigate, see, find, extract, read, click, act, fill, select, scroll, wait,
-// screenshot, eval, tabs, upload, press_key, hover, history, where) served over
+// screenshot, eval, tabs, upload, press_key, hover, history, where, reset) served over
 // stdio. v2 adds intent-first act, a verdict on every action, level=brief page
 // comprehension, extract (structured data), history (session memory offload),
 // semantic wait conditions, multi-field fill, scroll-awareness, browser
@@ -17,7 +17,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "2.0.0"
+const Version = "2.0.1"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 
@@ -43,12 +43,13 @@ var toolRegistry = map[string]registerFunc{
 	"hover":      registerHover,
 	"history":    registerHistory,
 	"where":      registerWhere,
+	"reset":      registerReset,
 }
 
 // toolOrder is the deterministic registration order (map iteration is unordered).
 var toolOrder = []string{
 	"navigate", "see", "find", "extract", "read", "click", "act", "fill", "select", "scroll", "wait",
-	"screenshot", "eval", "tabs", "upload", "press_key", "hover", "history", "where",
+	"screenshot", "eval", "tabs", "upload", "press_key", "hover", "history", "where", "reset",
 }
 
 // New builds an MCP server with all tools bound to a Session.

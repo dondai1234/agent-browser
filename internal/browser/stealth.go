@@ -79,7 +79,7 @@ func detectChallengeTitleURL(url, title string) string {
 // actions cheap. Caller must hold s.mu.
 func (s *Session) detectChallengeDOMLocked(t *tab) string {
 	var hit string
-	_ = chromedp.Run(t.ctx, chromedp.Evaluate(`(function(){var s=document.querySelector('.g-recaptcha,.h-captcha,iframe[src*="recaptcha"],iframe[src*="hcaptcha"],#cf-challenge-running,.cf-turnstile');return s?'captcha':'';})()`, &hit))
+	_ = s.run(t, chromedp.Evaluate(`(function(){var s=document.querySelector('.g-recaptcha,.h-captcha,iframe[src*="recaptcha"],iframe[src*="hcaptcha"],#cf-challenge-running,.cf-turnstile');return s?'captcha':'';})()`, &hit))
 	if hit == "captcha" {
 		return "CAPTCHA detected (reCAPTCHA/hCaptcha/Turnstile). Needs a solver (start the server with --captcha-solver-key) or a human to solve it."
 	}
@@ -96,7 +96,7 @@ func (s *Session) waitForChallengeClearLocked(t *tab, max time.Duration) bool {
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 		var title, loc string
-		if err := chromedp.Run(t.ctx, chromedp.Title(&title), chromedp.Location(&loc)); err != nil {
+		if err := s.run(t, chromedp.Title(&title), chromedp.Location(&loc)); err != nil {
 			return false
 		}
 		if detectChallengeTitleURL(loc, title) == "" {

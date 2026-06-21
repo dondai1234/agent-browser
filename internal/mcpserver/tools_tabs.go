@@ -39,7 +39,11 @@ func registerTabs(srv *mcp.Server, sess *browser.Session) {
 			}
 			return textResult("opened new tab (empty)"), nil, nil
 		case "switch":
-			if err := sess.SwitchTab(a.ID); err != nil {
+			idOrLabel := a.ID
+			if idOrLabel == "" {
+				idOrLabel = a.Label
+			}
+			if err := sess.SwitchTab(idOrLabel); err != nil {
 				return errResult(err), nil, nil
 			}
 			// Like `new`: return the current tab's orientation if it has a
@@ -49,7 +53,11 @@ func registerTabs(srv *mcp.Server, sess *browser.Session) {
 			}
 			return textResult(formatTabs(sess.Tabs())), nil, nil
 		case "close":
-			if err := sess.CloseTab(a.ID); err != nil {
+			idOrLabel := a.ID
+			if idOrLabel == "" {
+				idOrLabel = a.Label
+			}
+			if err := sess.CloseTab(idOrLabel); err != nil {
 				return errResult(err), nil, nil
 			}
 			return textResult(formatTabs(sess.Tabs())), nil, nil

@@ -194,7 +194,7 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 			return &ActResult{Resolved: &resolved}, fmt.Errorf("resolved [%s] %s %q is a %s; pass a value to fill it (or name a clickable control instead)", resolved.Ref, resolved.Role, resolved.Name, resolved.Role)
 		}
 		verb = "fill"
-		if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
@@ -204,18 +204,31 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 			return &ActResult{Resolved: &resolved, Verb: verb}, err
 		}
 	case resolved.Role == "combobox" && strings.TrimSpace(value) != "":
-		verb = "select"
-		if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		// A combobox may be a native <select> (select the option) OR an ARIA
+		// combobox over a textarea/input (Google search, autocomplete widgets) -
+		// those have no .options, so selectJS no-ops on them. Probe the tag:
+		// SELECT -> select the option; otherwise fill (native value setter +
+		// input/change, which is what React/Vue autocompletes actually listen for).
+		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
 			}
-			return s.selectNodeLocked(ctx, id, value)
+			var isSelect bool
+			if res, _, e := runtime.CallFunctionOn(`function(){return this.tagName==='SELECT'}`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
+				_ = json.Unmarshal(res.Value, &isSelect)
+			}
+			if isSelect {
+				verb = "select"
+				return s.selectNodeLocked(ctx, id, value)
+			}
+			verb = "fill"
+			return s.fillNodeLocked(ctx, id, value)
 		})); err != nil {
 			return &ActResult{Resolved: &resolved, Verb: verb}, err
 		}
 	default:
-		if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err

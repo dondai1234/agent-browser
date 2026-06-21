@@ -79,8 +79,71 @@ type Session struct {
 	// init script + jittered mouse paths). Default true.
 	stealth bool
 
+	// opTimeout bounds a single CDP operation (see run/runTimeout). Default
+	// opTimeoutDefault; the #1 reliability fix: without it a hung page wedges
+	// the session mutex and every tool blocks on the lock until the MCP client
+	// times out (the "session hung, all tools timed out" failure mode).
+	opTimeout time.Duration
+
 	// per-tab listener state.
 	dialogListening map[*tab]bool
+}
+
+// opTimeoutDefault bounds a single CDP operation (chromedp.Run). A hung page
+// (renderer crash, mid-navigation execution-context teardown, a challenge that
+// never resolves) can make a CDP call never return; without a per-op bound that
+// call holds the session mutex forever and EVERY tool then blocks on the lock
+// until the MCP client times out - the "session hung, all tools timed out"
+// failure. The bound turns a wedge into a normal error the agent can reset from.
+const opTimeoutDefault = 30 * time.Second
+
+// axPollTimeout bounds each accessibility-tree pull (GetFullAXTree + the iframe
+// merge). AX pulls are fast on a live page; a pull that takes longer is almost
+// always a wedging page, so fail it well under the op timeout (the build-tree
+// retry then gets a second attempt within the overall op budget).
+const axPollTimeout = 8 * time.Second
+
+// run executes CDP actions on the tab bounded by the per-operation timeout.
+// The timeout is enforced with a goroutine + select, NOT context.WithTimeout:
+// chromedp.Navigate registers a navigation listener tied to the chromedp
+// context, and a derived timeout context makes it return "context canceled"
+// (a real chromedp quirk that broke every navigate). So we run on the real tab
+// ctx (navigate works as before) and abandon the op if it exceeds the budget -
+// the caller (a public method holding s.mu) returns a timeout error + releases
+// the mutex, so the session can't wedge. A genuinely wedged op leaks a goroutine
+// until the tab is reset/closed (reset cancels t.ctx, which unblocks it). The
+// caller already holds s.mu; run itself does not take the lock.
+func (s *Session) run(t *tab, acts ...chromedp.Action) error {
+	return s.runTimeout(t, s.opTimeout, acts...)
+}
+
+// runTimeout is run with an explicit timeout (used by the AX pulls, which want
+// a tighter bound than the op timeout so the build-tree retry fits in budget).
+func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) error {
+	if d <= 0 {
+		return chromedp.Run(t.ctx, acts...)
+	}
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		// Recover from an unlikely panic so the select never waits a full
+		// timeout for a dead goroutine; a panic here would be a chromedp bug.
+		defer func() {
+			if r := recover(); r != nil {
+				select {
+				case done <- result{fmt.Errorf("cdp op panicked: %v", r)}:
+				default:
+				}
+			}
+		}()
+		done <- result{chromedp.Run(t.ctx, acts...)}
+	}()
+	select {
+	case r := <-done:
+		return r.err
+	case <-time.After(d):
+		return fmt.Errorf("operation timed out after %s (the page may be wedged; use reset to recover, or raise --op-timeout for slow pages)", d)
+	}
 }
 
 // historyEntry is one row of the session action log: what was done, the
@@ -108,6 +171,7 @@ type Config struct {
 	ViewportW   int           // window width; 0 = 1366
 	ViewportH   int           // window height; 0 = 768
 	Stealth     bool          // apply anti-detection flags + init script + jittered mouse (default true)
+	OpTimeout   time.Duration // per-CDP-operation timeout (default 30s); bounds any single chromedp.Run so a hung page can't wedge the session mutex + deadlock every tool. Raise for very slow pages.
 }
 
 // New launches Chrome and returns a Session with one initial tab.
@@ -159,17 +223,28 @@ func New(cfg Config) (*Session, error) {
 		browserCtx:      browserCtx,
 		browserCancel:   browserCancel,
 		stealth:         cfg.Stealth,
+		opTimeout:       cfg.OpTimeout,
 		dialogListening: map[*tab]bool{},
 		counter:         1,
 	}
-
-	firstCtx := browserCtx
-	firstCancel := browserCancel
-	if cfg.Timeout > 0 {
-		c, cancel := context.WithTimeout(browserCtx, cfg.Timeout)
-		firstCtx = c
-		firstCancel = func() { cancel(); browserCancel() }
+	if s.opTimeout <= 0 {
+		s.opTimeout = opTimeoutDefault
 	}
+
+	// The first tab gets its own chromedp target (a child of the browser session),
+	// so cancelling it closes ONLY that tab - not the browser. The old code reused
+	// browserCtx as the first tab's ctx, making t1.cancel == browserCancel: a
+	// reset/close of the first tab killed the whole browser (then every later op
+	// errored "context canceled"). The browser session itself is cancelled only
+	// in Close. An optional Timeout wraps the tab root (debug CLI); the MCP
+	// server leaves it long-lived.
+	tabRootCtx := browserCtx
+	if cfg.Timeout > 0 {
+		var tcancel context.CancelFunc
+		tabRootCtx, tcancel = context.WithTimeout(browserCtx, cfg.Timeout)
+		_ = tcancel // fires on timeout; browserCancel in Close also cancels it
+	}
+	firstCtx, firstCancel := chromedp.NewContext(tabRootCtx)
 	s.tabs = []*tab{{id: "t1", ctx: firstCtx, cancel: firstCancel}}
 	s.setupTabListenersLocked(s.tabs[0])
 	return s, nil
@@ -217,7 +292,7 @@ func (s *Session) Navigate(raw string) error {
 		return errors.New("no tab")
 	}
 	t.tree = nil
-	return chromedp.Run(t.ctx,
+	return s.run(t,
 		chromedp.Navigate(clean),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	)
@@ -302,7 +377,7 @@ func (s *Session) pullAXLocked(t *tab) error {
 			ti string
 			lo string
 		)
-		err := chromedp.Run(t.ctx,
+		err := s.runTimeout(t, axPollTimeout,
 			chromedp.Title(&ti),
 			chromedp.Location(&lo),
 			chromedp.ActionFunc(func(ctx context.Context) error {
@@ -361,7 +436,7 @@ func (s *Session) pullAXLocked(t *tab) error {
 // Cross-origin iframes (no contentDocument) are skipped - opaque to any tool.
 func (s *Session) gatherIframeAXLocked(t *tab) (extra []*accessibility.Node, frameOf map[int64]string) {
 	frameOf = map[int64]string{}
-	_ = chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	_ = s.runTimeout(t, axPollTimeout, chromedp.ActionFunc(func(ctx context.Context) error {
 		root, err := dom.GetDocument().WithDepth(0).Do(ctx)
 		if err != nil || root == nil {
 			return nil
@@ -439,7 +514,7 @@ func (s *Session) FillText() error {
 		return ErrNoSnapshot
 	}
 	var body string
-	if err := chromedp.Run(t.ctx, chromedp.Evaluate(readBodyJS, &body)); err != nil {
+	if err := s.run(t, chromedp.Evaluate(readBodyJS, &body)); err != nil {
 		return fmt.Errorf("see full: %w", err)
 	}
 	t.tree.Text = truncate(body, 8000)
@@ -481,7 +556,7 @@ func (s *Session) setupTabListenersLocked(t *tab) {
 		switch e := ev.(type) {
 		case *page.EventJavascriptDialogOpening:
 			go func() {
-				_ = chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				_ = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 					return page.HandleJavaScriptDialog(true).Do(ctx)
 				}))
 			}()
@@ -504,7 +579,7 @@ func (s *Session) setupTabListenersLocked(t *tab) {
 	})
 	// Enable the Network domain so ResponseReceived events fire. Best-effort:
 	// a failure here just means no net: signal, not a broken session.
-	_ = chromedp.Run(t.ctx, network.Enable())
+	_ = s.run(t, network.Enable())
 }
 
 // recentNetLocked returns the XHR/Fetch responses received on this tab since
@@ -647,8 +722,8 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	// history.back/forward/reload tear down the execution context as the page
 	// navigates, so the Evaluate itself may error - ignore it; WaitReady on the
 	// new page is the real signal.
-	_ = chromedp.Run(t.ctx, chromedp.Evaluate(js, nil))
-	if err := chromedp.Run(t.ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+	_ = s.run(t, chromedp.Evaluate(js, nil))
+	if err := s.run(t, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
 		return nil, fmt.Errorf("navigate %s: %w", action, err)
 	}
 	if err := s.buildTreeLocked(); err != nil {
@@ -673,6 +748,74 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	}
 	s.recordHistoryLocked(action, verdict, cur.tree.URL)
 	return cur.tree, nil
+}
+
+// Reset is the recovery path: it drops the current tab (cancelling its ctx,
+// which force-unblocks any hung CDP call on it - chromedp.Run returns ctx.Err)
+// and opens a fresh one, navigating to url if non-empty. Use when a page has
+// wedged the tab (a tool returned an op-timeout error, or the page is a dead
+// SPA). Other tabs are kept. Bounded by the op timeout like every action, so
+// reset itself can't wedge. Returns the new tab's orientation, or an error if
+// the browser itself is dead (restart the server in that case).
+func (s *Session) Reset(url string) (*snapshot.Tree, error) {
+	if url != "" {
+		clean, err := ValidateURL(url, s.AllowInsecureSchemes)
+		if err != nil {
+			return nil, err
+		}
+		url = clean
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Cancel + drop the current tab. Cancelling its ctx unblocks a hung CDP call
+	// on it even if a prior op is still mid-flight on this tab (the wedge release).
+	if cur := s.curTabLocked(); cur != nil {
+		if cur.cancel != nil {
+			cur.cancel()
+		}
+		if len(s.tabs) == 1 {
+			s.tabs = s.tabs[:0]
+			s.cur = 0
+		} else {
+			s.tabs = append(s.tabs[:s.cur], s.tabs[s.cur+1:]...)
+			if s.cur >= len(s.tabs) {
+				s.cur = len(s.tabs) - 1
+			}
+		}
+	}
+	// Fresh tab as current.
+	newCtx, cancel := chromedp.NewContext(s.browserCtx)
+	s.counter++
+	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel}
+	s.tabs = append(s.tabs, t)
+	s.cur = len(s.tabs) - 1
+	s.setupTabListenersLocked(t)
+	action := "reset (blank tab)"
+	if url != "" {
+		action = "reset -> " + url
+		if err := s.run(t, chromedp.Navigate(url), chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+			s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
+			return nil, fmt.Errorf("reset: navigate %s: %w", url, err)
+		}
+		if err := s.buildTreeLocked(); err != nil {
+			s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
+			return nil, fmt.Errorf("reset: %w", err)
+		}
+		c := s.curTabLocked()
+		if c.tree != nil {
+			c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
+			if c.tree.Challenge != "" {
+				if s.waitForChallengeClearLocked(c, 8*time.Second) {
+					if err := s.buildTreeLocked(); err == nil {
+						c = s.curTabLocked()
+						c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
+					}
+				}
+			}
+		}
+	}
+	s.recordHistoryLocked(action, "reset: fresh tab opened", url)
+	return s.curTabLocked().tree, nil
 }
 
 // Where returns a ~30-token "you are here" re-orientation: current URL, page

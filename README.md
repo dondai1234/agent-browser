@@ -33,16 +33,16 @@ Measured head-to-head against the two largest browser-automation MCP servers:
 |---|:--:|:--:|:--:|
 | Snapshot of Hacker News | **~1,200 tok** | ~14,700 tok | ~9,800 tok |
 | Snapshot of a GitHub repo | **~1,250 tok** | ~21,600 tok | ~20,800 tok |
-| Cost to connect (tool defs + instructions) | **~3,500 tok** (18 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
+| Cost to connect (tool defs + instructions) | **~3,650 tok** (20 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
 | Saucedemo login (real task, all succeed) | **~154 tok** (intent-first) | ~1,714 tok | ~1,483 tok |
 
 <div align="center">
 <img src="docs/img/tokens.svg" width="760" alt="Bar chart: saucedemo login token cost, agent-browser ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
 </div>
 
-Roughly tied with Playwright MCP on connect cost, lighter than Chrome DevTools MCP, and **for that you also get three things neither has**: intent-first `act`, action `verdict`s, and `extract`/`history`. On a real task the gap is ~10x: the login above is `navigate` + three `act` calls (name the field, name the button) instead of find, fill, fill, find, click, re-see, re-see.
+Within Playwright MCP's ballpark on connect cost, lighter than Chrome DevTools MCP, and **for that you also get three things neither has**: intent-first `act`, action `verdict`s, and `extract`/`history`. On a real task the gap is ~10x: the login above is `navigate` + three `act` calls (name the field, name the button) instead of find, fill, fill, find, click, re-see, re-see.
 
-<sub>Connect cost: agent-browser v2 ~3,500 tok estimated as chars/4.41; Playwright MCP ~3,442 tok from a real Claude Code per-tool breakdown (jdhodges.com); Chrome DevTools MCP ~5,000 tok commonly reported (figures vary ~5k-17k by config/version, using the low end). Snapshot sizes + the login task measured by running each server on the live page (Windows, headless, 2026-06); the login is ours via intent-first `act` (navigate brief + 3 acts) vs the competitors' by-ref flow, all three succeeding. Numbers are approximate; the per-task row is the decisive comparison.</sub>
+<sub>Connect cost: agent-browser v2 ~3,650 tok estimated as chars/4.41 (20 tools, including the `reset` recovery tool); Playwright MCP ~3,442 tok from a real Claude Code per-tool breakdown (jdhodges.com); Chrome DevTools MCP ~5,000 tok commonly reported (figures vary ~5k-17k by config/version, using the low end). Snapshot sizes + the login task measured by running each server on the live page (Windows, headless, 2026-06); the login is ours via intent-first `act` (navigate brief + 3 acts) vs the competitors' by-ref flow, all three succeeding. Numbers are approximate; the per-task row is the decisive comparison.</sub>
 
 ## What's new in v2 (the cognition layer)
 
@@ -116,9 +116,9 @@ where                                        →  url / page / auth / last actio
 
 Name the control, get a verdict. You rarely call `see` after an action - the verdict + delta tell you what happened. By-ref mode (`find` then `click r12`) still works when you need precision.
 
-## Tools (19)
+## Tools (20)
 
-`navigate` (open/back/forward/reload) · `see` (brief/minimal/summary/full) · `find` · `extract` (table/links/list/form/article) · `read` (link refs include `href`) · `click` · `act` (intent-first) · `fill` (single or `{ref:value}` map) · `select` · `scroll` (by pixels or `ref`; reports position) · `wait` (url/text/gone conditions) · `screenshot` (viewport/fullPage/ref) · `eval` · `tabs` · `upload` · `press_key` · `hover` · `history` · `where`
+`navigate` (open/back/forward/reload) · `see` (brief/minimal/summary/full) · `find` · `extract` (table/links/list/form/article) · `read` (link refs include `href`) · `click` · `act` (intent-first) · `fill` (single or `{ref:value}` map) · `select` · `scroll` (by pixels or `ref`; reports position) · `wait` (url/text/gone conditions) · `screenshot` (viewport/fullPage/ref) · `eval` · `tabs` · `upload` · `press_key` · `hover` · `history` · `where` · `reset` (drop a wedged tab + open a fresh one)
 
 Every tool's description is hand-crafted to tell the agent exactly what to pass, what it returns, and the gotcha. `act` resolves by name with local heuristics (no LLM); `press_key` fires native key events (Enter submits a form); `hover` triggers CSS `:hover`; `select` matches an option's value *or* visible text; `scroll` tells you whether to keep scrolling; `eval` covers anything the typed tools can't expose (canvas, computed state, history, cookies, console errors).
 

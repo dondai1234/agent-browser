@@ -42,7 +42,7 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 		return nil, errors.New("no tab")
 	}
 	t.tree = nil
-	if err := chromedp.Run(t.ctx,
+	if err := s.run(t,
 		chromedp.Navigate(clean),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	); err != nil {
@@ -91,7 +91,7 @@ func (s *Session) mutateAndSee(action string, settle time.Duration, do func(ctx 
 	}
 	before := t.tree
 	startTs := time.Now()
-	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(do)); err != nil {
+	if err := s.run(t, chromedp.ActionFunc(do)); err != nil {
 		return nil, nil, err
 	}
 	if settle > 0 {
@@ -215,7 +215,7 @@ func (s *Session) FillMany(fields map[string]string, settle time.Duration) (*sna
 	}
 	sort.Strings(refs)
 	filled := 0
-	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 		for _, ref := range refs {
 			id, e := s.resolveRefLocked(ctx, ref)
 			if e != nil {
@@ -267,7 +267,7 @@ func (s *Session) scrollInfoLocked(t *tab) string {
 		return "?"
 	}
 	var pos [3]float64
-	if err := chromedp.Run(t.ctx, chromedp.Evaluate(`[window.scrollY||0, window.innerHeight||0, (document.documentElement?document.documentElement.scrollHeight:0)||0]`, &pos)); err != nil {
+	if err := s.run(t, chromedp.Evaluate(`[window.scrollY||0, window.innerHeight||0, (document.documentElement?document.documentElement.scrollHeight:0)||0]`, &pos)); err != nil {
 		return "?"
 	}
 	y, vh, sh := pos[0], pos[1], pos[2]
@@ -364,11 +364,35 @@ func parseModifiers(mods string) input.Modifier {
 	return m
 }
 
+// validateKeyPress returns an error if key is not a named key or a single
+// character. press_key takes ONE key, not a string of text; typing text is
+// fill's job. Extracted so the rule is unit-testable without a browser. The
+// agent failing this (e.g. press_key key="weather in tokyo") was a silent no-op
+// before - the dispatched keyDown with a multi-char key string does nothing
+// useful, and the agent can't tell.
+func validateKeyPress(key string) error {
+	if key == "" {
+		return fmt.Errorf("press_key: key required (a named key like Enter/Escape/Tab, or a single character); to type text use fill, or act with a value")
+	}
+	if _, ok := namedKeys[key]; ok {
+		return nil
+	}
+	if r := []rune(key); len(r) == 1 {
+		return nil
+	}
+	return fmt.Errorf("press_key: %q is not a named key (Enter, Escape, Tab, ...) or a single character; to type text into a field use fill, or act with a value", key)
+}
+
 // PressKeyAndSee dispatches a real keyDown + keyUp (CDP Input.dispatchKeyEvent)
 // on the focused element and returns the delta. Real key events fire native
 // default actions (Enter submits, Escape closes, Tab moves focus, a char
-// inserts) - synthetic JS KeyboardEvents do not.
+// inserts) - synthetic JS KeyboardEvents do not. To TYPE TEXT into a field use
+// fill (or act with a value), not press_key: press_key takes ONE named key or
+// ONE character, not a string.
 func (s *Session) PressKeyAndSee(key, modifiers string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
+	if err := validateKeyPress(key); err != nil {
+		return nil, nil, err
+	}
 	return s.mutateAndSee(fmt.Sprintf("press_key %s", key), settle, func(ctx context.Context) error {
 		k, code, text, vk := keyParams(key)
 		mods := parseModifiers(modifiers)
@@ -424,7 +448,7 @@ func (s *Session) Upload(ref string, paths []string) error {
 	if t == nil {
 		return errors.New("no tab")
 	}
-	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	return s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 		var objectID runtime.RemoteObjectID
 		if ref != "" {
 			id, err := s.resolveRefLocked(ctx, ref)
@@ -465,7 +489,7 @@ func (s *Session) Screenshot(fullPage bool, ref string) ([]byte, error) {
 	}
 	if ref != "" {
 		var buf []byte
-		err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, e := s.resolveRefLocked(ctx, ref)
 			if e != nil {
 				return e
@@ -495,12 +519,12 @@ func (s *Session) Screenshot(fullPage bool, ref string) ([]byte, error) {
 	}
 	var buf []byte
 	if fullPage {
-		if err := chromedp.Run(t.ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+		if err := s.run(t, chromedp.FullScreenshot(&buf, 90)); err != nil {
 			return nil, fmt.Errorf("screenshot full: %w", err)
 		}
 		return buf, nil
 	}
-	if err := chromedp.Run(t.ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
+	if err := s.run(t, chromedp.CaptureScreenshot(&buf)); err != nil {
 		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 	return buf, nil
@@ -528,7 +552,7 @@ func (s *Session) Wait(d time.Duration, text, url, gone string) (string, error) 
 	for {
 		if url != "" {
 			var loc string
-			if err := chromedp.Run(t.ctx, chromedp.Location(&loc)); err != nil {
+			if err := s.run(t, chromedp.Location(&loc)); err != nil {
 				return "", fmt.Errorf("wait url: %w", err)
 			}
 			if strings.Contains(loc, url) {
@@ -536,7 +560,7 @@ func (s *Session) Wait(d time.Duration, text, url, gone string) (string, error) 
 			}
 		} else {
 			var inner string
-			if err := chromedp.Run(t.ctx, chromedp.Evaluate("document.body?document.body.innerText:''", &inner)); err != nil {
+			if err := s.run(t, chromedp.Evaluate("document.body?document.body.innerText:''", &inner)); err != nil {
 				return "", fmt.Errorf("wait: %w", err)
 			}
 			switch {
@@ -574,7 +598,7 @@ func (s *Session) Read(ref string, offset int) (string, error) {
 
 	if ref != "" {
 		var text string
-		err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, e := s.resolveRefLocked(ctx, ref)
 			if e != nil {
 				return e
@@ -603,7 +627,7 @@ func (s *Session) Read(ref string, offset int) (string, error) {
 	}
 
 	var body string
-	if err := chromedp.Run(t.ctx, chromedp.Evaluate(readBodyJS, &body)); err == nil {
+	if err := s.run(t, chromedp.Evaluate(readBodyJS, &body)); err == nil {
 		if offset > 0 {
 			if offset < len(body) {
 				body = body[offset:]
@@ -644,7 +668,7 @@ func (s *Session) Eval(script string) (string, error) {
 		return "", errors.New("no tab")
 	}
 	var out string
-	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 		res, exc, err := runtime.Evaluate(script).Do(ctx)
 		if err != nil {
 			return fmt.Errorf("eval: %w", err)
