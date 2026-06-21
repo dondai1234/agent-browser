@@ -14,7 +14,7 @@ import (
 // Page.addScriptToEvaluateOnNewDocument) to mask the common static automation
 // tells: navigator.webdriver, userAgentData, plugins, languages, window.chrome,
 // the Notification/Permissions inconsistency, WebGL vendor/renderer, and
-// hardware specs. Table-stakes — without it you're caught at the first gate;
+// hardware specs. Table-stakes - without it you're caught at the first gate;
 // with it you pass the basic static checks. It does NOT beat the CDP runtime
 // signal, GPU rendering hashes, or behavioral/entropy analysis (see README).
 const stealthInitScript = `(() => {
@@ -59,7 +59,7 @@ const stealthInitScript = `(() => {
 
 // detectChallengeTitleURL returns a non-empty challenge label if the page title
 // or URL looks like a bot-check interstitial (Cloudflare/DataDome "Just a
-// moment", generic JS challenge). Cheap (no DOM query) — called on every
+// moment", generic JS challenge). Cheap (no DOM query) - called on every
 // snapshot. DOM-based captcha detection (reCAPTCHA/hCaptcha) is done on
 // navigation via detectChallengeDOMLocked.
 func detectChallengeTitleURL(url, title string) string {

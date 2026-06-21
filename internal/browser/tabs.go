@@ -6,7 +6,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/agent-browser/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
 )
 
 // TabInfo is a tab's summary for the tabs tool.

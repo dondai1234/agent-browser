@@ -10,17 +10,19 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/agent-browser/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
 )
 
 // ErrNoSnapshot is returned when the current tab has no cached page tree.
@@ -33,6 +35,19 @@ type tab struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	tree   *snapshot.Tree
+
+	netMu     sync.Mutex
+	netEvents []netEvt // ring of recent XHR/Fetch responses, for the verdict's "did it hit the API" signal
+}
+
+// netEvt is one captured network response, kept only for XHR/Fetch (the API
+// calls an action triggers), not static assets. Used by the verdict to report
+// "net: /api/cart 200" so the agent knows a click reached the backend even
+// when the DOM change is subtle or role-less.
+type netEvt struct {
+	url    string
+	status int64
+	ts     time.Time
 }
 
 // Session is a persistent Chrome browser with a current tab and optional
@@ -47,6 +62,13 @@ type Session struct {
 	cur     int
 	counter int
 
+	// history is the rolling action log (offloaded from the agent's context so
+	// long tasks don't bloat it). Appended under s.mu by every action + navigate;
+	// capped to the last maxHistory entries. histStep keeps incrementing across
+	// trims so step numbers stay monotonic + unique.
+	history  []historyEntry
+	histStep int
+
 	// AllowInsecureSchemes opts in to file/javascript/data/about/blob URLs.
 	AllowInsecureSchemes bool
 	// AllowEval controls the eval tool (arbitrary page JS). On by default;
@@ -60,6 +82,21 @@ type Session struct {
 	// per-tab listener state.
 	dialogListening map[*tab]bool
 }
+
+// historyEntry is one row of the session action log: what was done, the
+// verdict it produced, and the page URL at the time. Queried via the history
+// tool so the agent can re-orient after a long flow without re-snapshotting.
+type historyEntry struct {
+	Step    int
+	Time    time.Time
+	Action  string
+	Verdict string
+	URL     string
+}
+
+// maxHistory bounds the in-memory action log (and thus the history tool's worst
+// case). 200 steps covers very long flows; older entries drop off the front.
+const maxHistory = 200
 
 // Config configures a Session.
 type Config struct {
@@ -83,14 +120,14 @@ func New(cfg Config) (*Session, error) {
 		// Drop --enable-automation (removes the "controlled by automated software"
 		// banner + the automation blink signal) and disable the
 		// AutomationControlled blink feature (sets navigator.webdriver=false at
-		// the engine level — more robust than a JS override). Table-stakes stealth.
+		// the engine level - more robust than a JS override). Table-stakes stealth.
 		opts = append(opts,
 			chromedp.Flag("enable-automation", false),
 			chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		)
 	}
 	// Modern "new" headless has a near-real fingerprint; headed uses the real
-	// GPU (best render/timing fingerprint) — prefer --headless=false for hard
+	// GPU (best render/timing fingerprint) - prefer --headless=false for hard
 	// targets when a display is available.
 	if cfg.Headless {
 		opts = append(opts, chromedp.Flag("headless", "new"))
@@ -305,6 +342,12 @@ func (s *Session) pullAXLocked(t *tab) error {
 	tree := snapshot.BuildTree(all)
 	tree.URL = loc
 	tree.Title = title
+	// Detect a bot-check interstitial on every snapshot (cheap: just title/url
+	// strings), not only on navigate. A click that lands on a Cloudflare wall
+	// then surfaces CHALLENGE: in its verdict, so the agent knows the action
+	// was blocked instead of seeing an opaque tree. DOM-based captcha probing
+	// stays navigate-only (it's a CDP evaluate; kept off the hot action path).
+	tree.Challenge = detectChallengeTitleURL(loc, title)
 	tree.SetFrames(frameOf)
 	t.tree = tree
 	return nil
@@ -420,21 +463,241 @@ func (s *Session) resolveRefLocked(ctx context.Context, ref string) (runtime.Rem
 	return s.resolveBackendLocked(ctx, el.Backend, ref)
 }
 
-// setupTabListenersLocked installs per-tab event listeners (JS dialog
-// auto-accept). Idempotent per tab. Caller must hold s.mu.
+// setupTabListenersLocked installs per-tab event listeners: JS dialog
+// auto-accept AND a read-only network listener (XHR/Fetch responses) that
+// feeds the verdict's "net:" signal. Idempotent per tab. Caller must hold s.mu.
+//
+// The network listener is read-only (it observes ResponseReceived events) - it
+// does NOT pause requests (the Fetch-domain pausing that deadlocked the v1
+// intercept feature). It only appends to a per-tab ring under the tab's own
+// netMu, so the listener goroutine never re-enters chromedp.Run and cannot
+// deadlock the action path.
 func (s *Session) setupTabListenersLocked(t *tab) {
 	if t == nil || s.dialogListening[t] {
 		return
 	}
 	s.dialogListening[t] = true
 	chromedp.ListenTarget(t.ctx, func(ev any) {
-		if _, ok := ev.(*page.EventJavascriptDialogOpening); !ok {
-			return
+		switch e := ev.(type) {
+		case *page.EventJavascriptDialogOpening:
+			go func() {
+				_ = chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+					return page.HandleJavaScriptDialog(true).Do(ctx)
+				}))
+			}()
+		case *network.EventResponseReceived:
+			// Only API calls (XHR/Fetch), never static assets - those would flood
+			// the verdict with JS/CSS/image noise on every page load.
+			if e.Type != network.ResourceTypeXHR && e.Type != network.ResourceTypeFetch {
+				return
+			}
+			if e.Response == nil {
+				return
+			}
+			t.netMu.Lock()
+			t.netEvents = append(t.netEvents, netEvt{url: e.Response.URL, status: e.Response.Status, ts: time.Now()})
+			if len(t.netEvents) > 64 {
+				t.netEvents = t.netEvents[len(t.netEvents)-64:]
+			}
+			t.netMu.Unlock()
 		}
-		go func() {
-			_ = chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				return page.HandleJavaScriptDialog(true).Do(ctx)
-			}))
-		}()
 	})
+	// Enable the Network domain so ResponseReceived events fire. Best-effort:
+	// a failure here just means no net: signal, not a broken session.
+	_ = chromedp.Run(t.ctx, network.Enable())
+}
+
+// recentNetLocked returns the XHR/Fetch responses received on this tab since
+// `since`, for the verdict's net: summary. Caller must hold s.mu (or be fine
+// racing the listener - we only read under netMu). The tab's netMu is a
+// separate lock from s.mu, so this never deadlocks with the listener goroutine.
+func (s *Session) recentNetLocked(t *tab, since time.Time) []netEvt {
+	if t == nil {
+		return nil
+	}
+	t.netMu.Lock()
+	defer t.netMu.Unlock()
+	var out []netEvt
+	for _, e := range t.netEvents {
+		if !e.ts.Before(since) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// summarizeNet renders the action-window XHR/Fetch responses as a compact
+// "N requests (last: /path status, ...)" string for the verdict. Shows up to 3
+// most recent (the action's own request is usually last); a count covers the
+// rest. URLs are shortened to path+query so the line stays dense.
+func summarizeNet(evts []netEvt) string {
+	n := len(evts)
+	var parts []string
+	start := 0
+	if n > 3 {
+		start = n - 3
+	}
+	for _, e := range evts[start:] {
+		parts = append(parts, fmt.Sprintf("%s %d", shortURL(e.url), e.status))
+	}
+	if n <= 3 {
+		return strings.Join(parts, ", ")
+	}
+	return fmt.Sprintf("%d requests (last: %s)", n, strings.Join(parts, ", "))
+}
+
+// shortURL reduces a URL to its path+query (drops scheme+host) and truncates,
+// so a net: line stays short: "https://api.site.com/v1/cart?x=1" -> "/v1/cart?x=1".
+func shortURL(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+		if s := strings.IndexByte(u, '/'); s >= 0 {
+			u = u[s:]
+		} else {
+			u = "/"
+		}
+	}
+	if len(u) > 60 {
+		u = u[:60] + "..."
+	}
+	return u
+}
+
+// recordHistoryLocked appends one action-log entry. Caller must hold s.mu.
+// step numbers stay monotonic across trims (histStep keeps counting) so the
+// agent can reference "since step N" stably across a long session.
+func (s *Session) recordHistoryLocked(action, verdict, url string) {
+	s.histStep++
+	s.history = append(s.history, historyEntry{
+		Step:    s.histStep,
+		Time:    time.Now(),
+		Action:  action,
+		Verdict: verdict,
+		URL:     url,
+	})
+	if len(s.history) > maxHistory {
+		s.history = s.history[len(s.history)-maxHistory:]
+	}
+}
+
+// History returns the action log as compact text for the history tool. last>0
+// limits to the most recent N (after any error filter); errorsOnly filters to
+// entries where the action was blocked (a CHALLENGE verdict). Step numbers are
+// preserved (not renumbered) so the agent can track progress across calls.
+func (s *Session) History(last int, errorsOnly bool) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries := s.history
+	if errorsOnly {
+		filt := make([]historyEntry, 0, len(entries))
+		for _, e := range entries {
+			if strings.Contains(e.Verdict, "CHALLENGE") {
+				filt = append(filt, e)
+			}
+		}
+		entries = filt
+	}
+	shownAll := len(entries)
+	if last > 0 && len(entries) > last {
+		entries = entries[len(entries)-last:]
+	}
+	var b strings.Builder
+	if len(entries) == 0 {
+		b.WriteString("history: (empty - no actions recorded yet)")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "history (%d entries", shownAll)
+	if errorsOnly {
+		b.WriteString(", errors only")
+	}
+	if last > 0 && shownAll > last {
+		fmt.Fprintf(&b, ", showing last %d", last)
+	}
+	b.WriteString("):\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "#%d %s %s | %s | %s\n", e.Step, e.Time.Format("15:04:05"), e.Action, e.Verdict, shortURL(e.URL))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// NavigateAction performs a browser navigation that isn't a URL open: back,
+// forward, or reload. Each rebuilds the tree and returns the new orientation
+// (like NavigateAndSee). back/forward with no history to traverse is a no-op
+// (returns the current page). Records the action in the session log.
+func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
+	action = strings.ToLower(strings.TrimSpace(action))
+	var js string
+	switch action {
+	case "back":
+		js = "window.history.back()"
+	case "forward":
+		js = "window.history.forward()"
+	case "reload":
+		js = "location.reload()"
+	default:
+		return nil, fmt.Errorf("unknown navigate action %q (open|back|forward|reload)", action)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.curTabLocked()
+	if t == nil {
+		return nil, errors.New("no tab")
+	}
+	t.tree = nil
+	// history.back/forward/reload tear down the execution context as the page
+	// navigates, so the Evaluate itself may error - ignore it; WaitReady on the
+	// new page is the real signal.
+	_ = chromedp.Run(t.ctx, chromedp.Evaluate(js, nil))
+	if err := chromedp.Run(t.ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		return nil, fmt.Errorf("navigate %s: %w", action, err)
+	}
+	if err := s.buildTreeLocked(); err != nil {
+		return nil, err
+	}
+	cur := s.curTabLocked()
+	cur.tree.Challenge = detectChallengeTitleURL(cur.tree.URL, cur.tree.Title)
+	if cur.tree.Challenge != "" {
+		if s.waitForChallengeClearLocked(cur, 8*time.Second) {
+			if err := s.buildTreeLocked(); err == nil {
+				cur = s.curTabLocked()
+				cur.tree.Challenge = detectChallengeTitleURL(cur.tree.URL, cur.tree.Title)
+			}
+		}
+	}
+	verdict := fmt.Sprintf("%s -> navigated to %s", action, cur.tree.URL)
+	if cur.tree.Title != "" {
+		verdict += fmt.Sprintf(" %q", cur.tree.Title)
+	}
+	if cur.tree.Challenge != "" {
+		verdict = action + " -> CHALLENGE: " + cur.tree.Challenge
+	}
+	s.recordHistoryLocked(action, verdict, cur.tree.URL)
+	return cur.tree, nil
+}
+
+// Where returns a ~30-token "you are here" re-orientation: current URL, page
+// type, auth state, the last action's verdict, and scroll position (more-below
+// / at-bottom). For recovering context after a long flow or a compaction
+// without a full see + history. scrollInfoLocked does one CDP eval; we hold
+// s.mu here, so it's consistent with the scroll action's pattern.
+func (s *Session) Where() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.curTabLocked()
+	if t == nil || t.tree == nil {
+		return "no page snapshot yet (call navigate first)"
+	}
+	tr := t.tree
+	var b strings.Builder
+	fmt.Fprintf(&b, "url: %s\n", tr.URL)
+	if tr.Challenge != "" {
+		fmt.Fprintf(&b, "CHALLENGE: %s\n", tr.Challenge)
+	}
+	fmt.Fprintf(&b, "page: %s | auth: %s\n", tr.PageType(), tr.AuthState())
+	if len(s.history) > 0 {
+		last := s.history[len(s.history)-1]
+		fmt.Fprintf(&b, "last: #%d %s | %s\n", last.Step, last.Action, last.Verdict)
+	}
+	fmt.Fprintf(&b, "scroll: %s\n", s.scrollInfoLocked(t))
+	return strings.TrimRight(b.String(), "\n")
 }

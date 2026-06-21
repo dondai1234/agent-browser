@@ -2,30 +2,43 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/internal/browser"
-	"github.com/dondai1234/agent-browser/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v2/internal/browser"
+	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
 )
 
 func registerNavigate(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		URL   string `json:"url" jsonschema:"URL to open (http/https only; other schemes blocked unless --allow-insecure-schemes)"`
-		Level string `json:"level,omitempty" jsonschema:"minimal (default) | summary (interactive list + refs) | full (summary + text)"`
+		Action string `json:"action,omitempty" jsonschema:"open (default: navigate to url) | back | forward | reload"`
+		URL    string `json:"url,omitempty" jsonschema:"URL to open (action=open; http/https only; other schemes blocked unless --allow-insecure-schemes)"`
+		Level  string `json:"level,omitempty" jsonschema:"brief (page type + auth + primary actions, ~50 tok) | minimal (default: orientation + counts) | summary (interactive list + refs) | full (summary + text)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "navigate",
-		Description: "Navigate to a URL and return the page snapshot. Default level=minimal (orientation + counts). Use level=summary to get the interactive element list with refs in the same call, so you can act immediately without a separate see. level=full adds the page text.",
+		Description: "Navigate the current tab and return the page snapshot. action=open (default) opens url; back/forward traverse browser history; reload re-fetches the current page. back/forward with no history is a no-op (returns the current page). level=brief gives a one-glance comprehension (page type, auth, primary actions, regions) - best first call on an unknown page; default minimal (orientation + counts); summary (interactive list + refs to act on immediately); full (summary + text).",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
-		tree, err := sess.NavigateAndSee(a.URL)
+		action := strings.ToLower(strings.TrimSpace(a.Action))
+		var tree *snapshot.Tree
+		var err error
+		switch action {
+		case "", "open":
+			tree, err = sess.NavigateAndSee(a.URL)
+		case "back", "forward", "reload":
+			tree, err = sess.NavigateAction(action)
+		default:
+			return errResult(fmt.Errorf("unknown navigate action %q (open|back|forward|reload)", action)), nil, nil
+		}
 		if err != nil {
 			return errResult(err), nil, nil
 		}
 		level := snapshot.Level(a.Level)
 		switch level {
-		case snapshot.LevelMinimal, snapshot.LevelSummary, snapshot.LevelFull:
+		case snapshot.LevelBrief, snapshot.LevelMinimal, snapshot.LevelSummary, snapshot.LevelFull:
 		default:
 			level = snapshot.LevelMinimal
 		}
@@ -40,11 +53,11 @@ func registerNavigate(srv *mcp.Server, sess *browser.Session) {
 
 func registerSee(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Level string `json:"level,omitempty" jsonschema:"minimal (default) | summary | full"`
+		Level string `json:"level,omitempty" jsonschema:"brief (page type + auth + primary actions, ~50 tok) | minimal (default: url/title/landmarks/headings/counts) | summary (every interactive element with refs, capped 150) | full (summary + visible text)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "see",
-		Description: "Snapshot the current page from the cached a11y tree (no reload). minimal = url/title/landmarks/headings/interactive counts (~30 tokens, for orientation). summary = every interactive element with refs, capped 150 (prefer find for specifics). full = summary + visible page text. Pick the cheapest level that gives what you need.",
+		Description: "Snapshot the current page from the cached a11y tree (no reload). brief = one-glance comprehension: page type, auth state, the top primary actions with refs, regions, counts (~50 tok) - use it to decide what to do next on an unknown page. minimal = url/title/landmarks/headings/interactive counts. summary = every interactive element with refs, capped 150 (prefer find for specifics). full = summary + visible page text. Pick the cheapest level that gives what you need.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		tree := sess.Tree()
@@ -53,7 +66,7 @@ func registerSee(srv *mcp.Server, sess *browser.Session) {
 		}
 		level := snapshot.Level(a.Level)
 		switch level {
-		case snapshot.LevelMinimal, snapshot.LevelSummary, snapshot.LevelFull:
+		case snapshot.LevelBrief, snapshot.LevelMinimal, snapshot.LevelSummary, snapshot.LevelFull:
 		default:
 			level = snapshot.LevelMinimal
 		}
@@ -101,7 +114,7 @@ func registerRead(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read",
-		Description: "Read text without re-snapshotting. With ref: url+title+that element's text. Without ref: url+title+full body text (walks same-origin iframes), truncated at 8000 chars - pass offset to paginate; the marker reports the total length. Cheaper than see full when you only need text.",
+		Description: "Read text without re-snapshotting. With ref: url+title+that element's text (a link ref also includes its href, so you know where it goes without clicking). Without ref: url+title+full body text (walks same-origin iframes), truncated at 8000 chars - pass offset to paginate; the marker reports the total length. Cheaper than see full when you only need text.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		out, err := sess.Read(a.Ref, a.Offset)

@@ -28,6 +28,7 @@ const (
 	LevelMinimal Level = "minimal" // orientation: landmarks + headings + interactive counts
 	LevelSummary Level = "summary" // working set: full interactive + heading list with refs
 	LevelFull    Level = "full"    // summary + visible text content
+	LevelBrief   Level = "brief"   // comprehension: page type + auth + primary actions + regions + counts (~50 tok)
 )
 
 // MaxSummaryElements caps a summary render. Beyond this, the render stops and
@@ -57,7 +58,18 @@ type Tree struct {
 	Elems     []Element // interactive + heading elements, in tree order
 	Landmarks []Element // banner/main/nav/footer/region/form/search
 	Headings  []Element // heading elements only
+	Signals   []Element // live-region/modal nodes (alert/status/dialog) kept for verdict detection only - never rendered, never get a ref
 	Counts    map[string]int
+}
+
+// signalRoles are live-region/modal roles that carry an outcome signal (a
+// toast, a status update, a modal opening/closing). They are NOT interactive,
+// so they don't get a ref or a snapshot line - but they're exactly what a
+// verdict needs to say "it worked" / "a dialog opened". Kept in Tree.Signals
+// and diffed separately so the verdict can detect outcomes the element delta
+// misses (a success toast, a modal appearing).
+var signalRoles = map[string]bool{
+	"alert": true, "status": true, "alertdialog": true, "dialog": true,
 }
 
 // interactiveRoles: roles an agent can act on. Structural noise (generic,
@@ -100,6 +112,10 @@ func BuildTree(nodes []*accessibility.Node) *Tree {
 			t.Landmarks = append(t.Landmarks, Element{Role: role, Name: name, Backend: backend, Props: props})
 		case role == "image" && name != "":
 			t.addElement(role, name, val, backend, props)
+		case signalRoles[role]:
+			// Outcome-signal nodes (toasts/modals). No ref, not rendered - kept only
+			// for verdict detection (see delta.go InferVerdict).
+			t.Signals = append(t.Signals, Element{Role: role, Name: name, Value: val, Backend: backend, Props: props})
 		}
 	}
 	return t
@@ -136,6 +152,8 @@ func (t *Tree) Render(level Level) string {
 	switch level {
 	case LevelMinimal:
 		return t.renderMinimal()
+	case LevelBrief:
+		return t.renderBrief()
 	case LevelFull:
 		return t.renderSummary() + t.renderText()
 	default:
@@ -173,6 +191,13 @@ func (t *Tree) renderMinimal() string {
 			fmt.Fprintf(&b, "  h%s %q\n", lvl, h.Name)
 		}
 	}
+	b.WriteString(t.countsLine() + "\n")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// countsLine returns "interactive: N (role:count, ...)" sorted, shared by the
+// minimal and brief levels so the count format can't drift between them.
+func (t *Tree) countsLine() string {
 	total := 0
 	roles := make([]string, 0, len(t.Counts))
 	for r, c := range t.Counts {
@@ -180,8 +205,7 @@ func (t *Tree) renderMinimal() string {
 		roles = append(roles, fmt.Sprintf("%s:%d", r, c))
 	}
 	sort.Strings(roles)
-	fmt.Fprintf(&b, "interactive: %d (%s)\n", total, strings.Join(roles, ", "))
-	return strings.TrimRight(b.String(), "\n")
+	return fmt.Sprintf("interactive: %d (%s)", total, strings.Join(roles, ", "))
 }
 
 // renderSummary: full interactive + heading element list with refs, capped.
@@ -210,4 +234,184 @@ func (t *Tree) renderText() string {
 		return ""
 	}
 	return "\ntext:\n" + t.Text
+}
+
+// renderBrief is the v2 comprehension layer: a dense ~6-line page brief so the
+// agent lands oriented (what IS this page, am I logged in, what can I do here,
+// where are the regions) without scanning refs. Pure heuristics over the AX
+// tree - no DOM probe, no LLM, no extra CDP round-trip. Honest: pageType/auth
+// are best-effort guesses from the tree, not ground truth; the agent can always
+// drop to summary for the raw refs.
+func (t *Tree) renderBrief() string {
+	var b strings.Builder
+	if t.URL != "" {
+		fmt.Fprintf(&b, "url: %s\n", t.URL)
+	}
+	if t.Title != "" {
+		fmt.Fprintf(&b, "title: %q\n", t.Title)
+	}
+	if t.Challenge != "" {
+		fmt.Fprintf(&b, "CHALLENGE: %s\n", t.Challenge)
+	}
+	fmt.Fprintf(&b, "page: %s\n", t.PageType())
+	fmt.Fprintf(&b, "auth: %s\n", t.AuthState())
+	if acts := t.primaryActions(); len(acts) > 0 {
+		parts := make([]string, 0, len(acts))
+		for _, a := range acts {
+			parts = append(parts, fmt.Sprintf("%s %s %q", a.Ref, a.Role, a.Name))
+		}
+		fmt.Fprintf(&b, "actions: %s\n", strings.Join(parts, " | "))
+	}
+	if len(t.Landmarks) > 0 {
+		fmt.Fprintf(&b, "regions: %s\n", strings.Join(uniqueLandmarkRoles(t.Landmarks), " "))
+	}
+	b.WriteString(t.countsLine() + "\n")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// pageType returns a one/two-word classification of what the page IS, so the
+// agent can pick a strategy without reading every ref. Heuristic over the AX
+// tree only - honest: falls back to "page" when unsure. Priority: challenge >
+// open dialog > login/signup (password field) > list/search results > article >
+// form > nav/landing > generic page.
+func (t *Tree) PageType() string {
+	if t.Challenge != "" {
+		return "challenge interstitial"
+	}
+	for _, s := range t.Signals {
+		if s.Role == "dialog" || s.Role == "alertdialog" {
+			name := s.Name
+			if name == "" {
+				name = s.Role
+			}
+			return "dialog: " + name
+		}
+	}
+	// A textbox named "password" is the strongest login/signup signal.
+	hasPwd := false
+	for _, e := range t.Elems {
+		if e.Role == "textbox" && containsLower(e.Name, "password") {
+			hasPwd = true
+			break
+		}
+	}
+	if hasPwd {
+		for _, e := range t.Elems {
+			if (e.Role == "button" || e.Role == "link") && (containsLower(e.Name, "sign up") || containsLower(e.Name, "register") || containsLower(e.Name, "create account")) {
+				return "signup form"
+			}
+		}
+		return "login form"
+	}
+	if t.Counts["link"] >= 15 || t.Counts["option"] >= 8 {
+		return "list / search results"
+	}
+	if len(t.Headings) >= 3 && t.Counts["link"] < 10 {
+		return "article / content"
+	}
+	for _, l := range t.Landmarks {
+		if l.Role == "form" && t.Counts["textbox"] > 0 {
+			return "form"
+		}
+	}
+	if t.Counts["link"] >= 10 {
+		return "nav / landing page"
+	}
+	return "page"
+}
+
+// authState returns a best-effort auth signal: "logged in" if a logout/sign-out
+// control is present, "anonymous" if a login/sign-in control is, "blocked" on
+// a challenge, else "unknown". Honest: a guess from visible controls, not a
+// read of the actual session - a site with neither control reads "unknown".
+func (t *Tree) AuthState() string {
+	if t.Challenge != "" {
+		return "blocked"
+	}
+	for _, e := range t.Elems {
+		if !isClickable(e.Role) {
+			continue
+		}
+		n := strings.ToLower(e.Name)
+		if strings.Contains(n, "log out") || strings.Contains(n, "sign out") || strings.Contains(n, "logout") || strings.Contains(n, "signout") {
+			return "logged in"
+		}
+	}
+	for _, e := range t.Elems {
+		if !isClickable(e.Role) {
+			continue
+		}
+		n := strings.ToLower(e.Name)
+		if strings.Contains(n, "log in") || strings.Contains(n, "sign in") || strings.Contains(n, "login") || strings.Contains(n, "signin") {
+			return "anonymous"
+		}
+	}
+	return "unknown"
+}
+
+// actionVerbs names that mark a control as a primary action. Order matters
+// only for readability (we collect all matches, capped at 5).
+var actionVerbs = []string{
+	"sign in", "log in", "sign up", "register", "submit", "search", "buy",
+	"add to cart", "checkout", "continue", "next", "save", "delete", "edit",
+	"cancel", "confirm", "send", "create", "download", "play", "start", "stop",
+	"back", "close", "add", "login", "signin", "signup",
+}
+
+// primaryActions returns up to 5 elements that look like the page's main
+// actions (clickable + an action-verb name), topped up with the first few
+// clickables when the page has few verb-named controls. Gives the agent a
+// starting set of refs + intents without a find round-trip.
+func (t *Tree) primaryActions() []Element {
+	var matched []Element
+	seen := map[string]bool{}
+	for _, e := range t.Elems {
+		if !isClickable(e.Role) {
+			continue
+		}
+		n := strings.ToLower(e.Name)
+		for _, v := range actionVerbs {
+			if strings.Contains(n, v) {
+				if !seen[e.Ref] {
+					matched = append(matched, e)
+					seen[e.Ref] = true
+				}
+				break
+			}
+		}
+		if len(matched) >= 5 {
+			return matched
+		}
+	}
+	for _, e := range t.Elems {
+		if len(matched) >= 5 {
+			break
+		}
+		if !isClickable(e.Role) || seen[e.Ref] {
+			continue
+		}
+		matched = append(matched, e)
+		seen[e.Ref] = true
+	}
+	return matched
+}
+
+func isClickable(role string) bool {
+	return role == "button" || role == "link" || role == "menuitem" || role == "tab"
+}
+
+func uniqueLandmarkRoles(ls []Element) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range ls {
+		if !seen[l.Role] {
+			seen[l.Role] = true
+			out = append(out, l.Role)
+		}
+	}
+	return out
+}
+
+func containsLower(s, sub string) bool {
+	return strings.Contains(strings.ToLower(s), sub)
 }

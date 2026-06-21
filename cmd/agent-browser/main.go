@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,19 +28,36 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/internal/browser"
-	"github.com/dondai1234/agent-browser/internal/mcpserver"
-	"github.com/dondai1234/agent-browser/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v2/internal/browser"
+	"github.com/dondai1234/agent-browser/v2/internal/mcpserver"
+	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
 )
 
 // version is the build version. Overridden at release-build time via
-// -ldflags "-X main.version=<tag>" (see .github/workflows/release.yml); "dev"
-// for local `go build` / `go install`.
+// -ldflags "-X main.version=<tag>" (see .github/workflows/release.yml). For a
+// plain `go install ...@vX.Y.Z` (no ldflags) it stays "dev" and versionString()
+// falls back to the module version embedded in the build info, so go-install
+// users still see the real version.
 var version = "dev"
+
+// versionString returns the version to report: the ldflags-injected version if
+// set, else the module version from the build info (set by `go install ...@ver`),
+// else "dev" for a local `go build`.
+func versionString() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
+}
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version" || os.Args[1] == "version") {
-		fmt.Println("agent-browser", version)
+		fmt.Println("agent-browser", versionString())
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
@@ -64,7 +82,7 @@ func runMCP(args []string) {
 	versionFlag := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(args)
 	if *versionFlag {
-		fmt.Println("agent-browser", version)
+		fmt.Println("agent-browser", versionString())
 		return
 	}
 
@@ -103,7 +121,7 @@ func runMCP(args []string) {
 	sess.AllowEval = !*noEval
 
 	opts := &mcp.ServerOptions{
-		Instructions: "agent-browser: token-efficient browser automation. Get refs with navigate (level=summary) or see/find, then act by ref (click/fill/select/scroll). Actions return a DELTA (only what changed) - no need to call see after each action. Delta lines: '+ [rN] ...' added (new ref, usable), '- [rN] ... (gone)' removed (old ref invalid), '~ [rN] ...' changed, 'no changes' = no visible effect (call see to refresh if unexpected), 'navigated: <url>' = page changed and ALL refs reset (re-see). Refs are per-tab - after tabs switch, use the returned orientation's refs. eval is on for anything the snapshot can't expose (canvas, computed state, custom waits).",
+		Instructions: "agent-browser v2: token-efficient browser automation built for the agent. ORIENT: navigate/see level=brief -> a page brief (type, auth, primary actions with refs, regions); level=summary -> the ref list. ACT BY INTENT: act \"Sign in\" or act \"Username\" value=x resolves a control by name (local heuristics, no LLM) and clicks/fills it in one call; several matches -> it returns candidates (disambiguate with nth/role). Every action returns a VERDICT (navigated to / dialog opened / status / changed / no visible effect / CHALLENGE) + a DELTA (what changed, fresh refs) so you rarely re-see; non-nav actions also fold in the XHRs that fired (net:). EXTRACT: extract table/links/list/form/article -> JSON (form gives {ref,role,name,value} to feed act/fill). RECALL: history -> the session action log, offloaded from your context. WAIT: wait url=/text=/gone=. FILL: fill fields={ref:value} for a whole form. By-ref tools (click/fill/select/hover/press_key) work when you have a ref. Refs are per-tab, reset on navigation. QoL: navigate action=back/forward/reload for history + refresh; scroll ref=r12 to bring an off-screen element into view; read on a link ref also returns its href; screenshot fullPage=true or ref=r12 for whole-page or single-element captures; where for a 30-token re-orientation when you lose your place. eval covers the rest.",
 	}
 	srv, err := mcpserver.New(sess, opts)
 	if err != nil {
@@ -131,7 +149,7 @@ func runDebug() {
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *versionFlag {
-		fmt.Println("agent-browser", version)
+		fmt.Println("agent-browser", versionString())
 		return
 	}
 
@@ -155,13 +173,18 @@ func runDebug() {
 		if err != nil {
 			log.Fatalf("click: %v", err)
 		}
-		out := delta.Render()
+		var out string
+		if delta.Verdict != "" {
+			out = "verdict: " + delta.Verdict + "\n"
+		}
 		if delta.Navigated {
-			out += "\n" + after.Render(snapshot.LevelMinimal)
+			out += after.Render(snapshot.LevelMinimal)
+		} else {
+			out += delta.Render()
 		}
 		fmt.Print(ensureNL(out))
-		fmt.Fprintf(os.Stderr, "--- click %s: %s | chars=%d ~tokens=%d ---\n",
-			*clickRef, delta.Summary(), len(out), len(out)/4)
+		fmt.Fprintf(os.Stderr, "--- click %s: verdict=%q %s | chars=%d ~tokens=%d ---\n",
+			*clickRef, delta.Verdict, delta.Summary(), len(out), len(out)/4)
 
 	case *findRole != "" || *findText != "":
 		var els []snapshot.Element

@@ -6,17 +6,20 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/internal/browser"
+	"github.com/dondai1234/agent-browser/v2/internal/browser"
 )
 
 func registerScreenshot(srv *mcp.Server, sess *browser.Session) {
-	type args struct{} // no parameters
+	type args struct {
+		FullPage bool   `json:"fullPage,omitempty" jsonschema:"capture the whole page, not just the viewport"`
+		Ref      string `json:"ref,omitempty" jsonschema:"element ref to capture just that element (clipped to its box); takes priority over fullPage"`
+	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "screenshot",
-		Description: "Capture the current viewport as a PNG. Use when visual layout matters (canvas, icons, charts, spatial relationships) that the text snapshot can't capture. Returns an image - only useful if your harness can view images.",
+		Description: "Capture the page as a PNG. Default: the current viewport. fullPage=true: the whole page. ref=r12: just that element (clipped to its bounding box). Use when visual layout matters (canvas, icons, charts, spatial relationships) that the text snapshot can't capture. Returns an image - only useful if your harness can view images.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
-		png, err := sess.Screenshot()
+		png, err := sess.Screenshot(a.FullPage, a.Ref)
 		if err != nil {
 			return errResult(err), nil, nil
 		}
@@ -27,18 +30,21 @@ func registerScreenshot(srv *mcp.Server, sess *browser.Session) {
 func registerWait(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
 		Seconds float64 `json:"seconds" jsonschema:"max seconds to wait"`
-		Text    string  `json:"text,omitempty" jsonschema:"if set, return early once this text appears in the page body"`
+		Text    string  `json:"text,omitempty" jsonschema:"return early once this text appears in the page body"`
+		URL     string  `json:"url,omitempty" jsonschema:"return early once the page URL contains this substring (e.g. a redirect to /dashboard)"`
+		Gone    string  `json:"gone,omitempty" jsonschema:"return early once this text is NO LONGER in the page body (e.g. a Loading spinner disappearing)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "wait",
-		Description: "Wait up to Seconds seconds, or until Text appears in the page body (whichever is first). Most actions already wait for the DOM to settle - use this only for async content that needs extra time (XHRs, animations).",
+		Description: "Wait up to Seconds seconds, or until a condition is met (whichever is first). url= waits for the URL to contain a substring (redirect done, login landed); text= waits for text to appear in the body; gone= waits for text to disappear (a spinner/loading banner clearing). Returns what satisfied it, or an error on timeout. Most actions already wait for the DOM to settle - use this for async content that needs extra time (XHRs, animations, redirects).",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		d := time.Duration(a.Seconds * float64(time.Second))
-		if err := sess.Wait(d, a.Text); err != nil {
+		out, err := sess.Wait(d, a.Text, a.URL, a.Gone)
+		if err != nil {
 			return errResult(err), nil, nil
 		}
-		return textResult("ok"), nil, nil
+		return textResult(out), nil, nil
 	})
 }
 

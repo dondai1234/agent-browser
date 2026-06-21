@@ -1,6 +1,11 @@
-// Package mcpserver wires the browser.Session into an MCP server: 15 tools
-// (navigate, see, find, read, click, fill, select, scroll, wait, screenshot,
-// eval, tabs, upload, press_key, hover) served over stdio.
+// Package mcpserver wires the browser.Session into an MCP server: 19 tools
+// (navigate, see, find, extract, read, click, act, fill, select, scroll, wait,
+// screenshot, eval, tabs, upload, press_key, hover, history, where) served over
+// stdio. v2 adds intent-first act, a verdict on every action, level=brief page
+// comprehension, extract (structured data), history (session memory offload),
+// semantic wait conditions, multi-field fill, scroll-awareness, browser
+// back/forward/reload, scroll-to-ref, link href on read, full-page/element
+// screenshots, and where (one-shot re-orientation).
 package mcpserver
 
 import (
@@ -8,11 +13,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/internal/browser"
+	"github.com/dondai1234/agent-browser/v2/internal/browser"
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "1.0.0"
+const Version = "2.0.0"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 
@@ -22,8 +27,10 @@ var toolRegistry = map[string]registerFunc{
 	"navigate":   registerNavigate,
 	"see":        registerSee,
 	"find":       registerFind,
+	"extract":    registerExtract,
 	"read":       registerRead,
 	"click":      registerClick,
+	"act":        registerAct,
 	"fill":       registerFill,
 	"select":     registerSelect,
 	"scroll":     registerScroll,
@@ -34,12 +41,14 @@ var toolRegistry = map[string]registerFunc{
 	"upload":     registerUpload,
 	"press_key":  registerPressKey,
 	"hover":      registerHover,
+	"history":    registerHistory,
+	"where":      registerWhere,
 }
 
 // toolOrder is the deterministic registration order (map iteration is unordered).
 var toolOrder = []string{
-	"navigate", "see", "find", "read", "click", "fill", "select", "scroll", "wait",
-	"screenshot", "eval", "tabs", "upload", "press_key", "hover",
+	"navigate", "see", "find", "extract", "read", "click", "act", "fill", "select", "scroll", "wait",
+	"screenshot", "eval", "tabs", "upload", "press_key", "hover", "history", "where",
 }
 
 // New builds an MCP server with all tools bound to a Session.

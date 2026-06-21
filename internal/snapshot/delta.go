@@ -31,6 +31,9 @@ type Delta struct {
 	Added     []Element // present after, not before (carry NEW refs, usable next)
 	Removed   []Element // present before, not after (OLD refs, now invalid)
 	Changed   []Element // same Backend, name/value differs (NEW refs, usable)
+	AddedSignals   []Element // live-region/modal nodes that appeared (toast/dialog opened)
+	RemovedSignals []Element // live-region/modal nodes that vanished (dialog closed)
+	Verdict   string // one-line semantic outcome ("navigated to ...", "dialog opened: ...", "no visible effect"); set by the browser layer via InferVerdict + challenge/network augmentation
 }
 
 // Diff compares two trees. If the URL changed (navigation), Navigated=true and
@@ -69,6 +72,33 @@ func Diff(before, after *Tree) *Delta {
 		}
 		if _, ok := afterSeen[e.Backend]; !ok {
 			d.Removed = append(d.Removed, e)
+		}
+	}
+	// Diff outcome-signal nodes (alert/status/dialog) the same way, so the
+	// verdict can detect a toast appearing or a modal opening/closing - things
+	// the element delta misses because those roles aren't interactive.
+	beforeSig := make(map[int64]Element, len(before.Signals))
+	for _, e := range before.Signals {
+		if e.Backend != 0 {
+			beforeSig[e.Backend] = e
+		}
+	}
+	afterSigSeen := make(map[int64]struct{}, len(after.Signals))
+	for _, e := range after.Signals {
+		if e.Backend == 0 {
+			continue
+		}
+		afterSigSeen[e.Backend] = struct{}{}
+		if _, ok := beforeSig[e.Backend]; !ok {
+			d.AddedSignals = append(d.AddedSignals, e)
+		}
+	}
+	for _, e := range before.Signals {
+		if e.Backend == 0 {
+			continue
+		}
+		if _, ok := afterSigSeen[e.Backend]; !ok {
+			d.RemovedSignals = append(d.RemovedSignals, e)
 		}
 	}
 	return d
@@ -143,4 +173,55 @@ func (d *Delta) Render() string {
 		fmt.Fprintf(&b, "~ %s\n", formatElement(e))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// InferVerdict produces a one-line semantic outcome from the delta: what the
+// action *meant*, not just what changed mechanically. Priority: navigation >
+// modal opened (with any toast text) > toast/status > modal closed > generic
+// change counts > nothing. The browser layer calls this, then overrides with a
+// CHALLENGE: line if the after-page is a bot-check interstitial (the action
+// didn't achieve its intent - the challenge blocked it).
+//
+// This is the v2 foundation: every act-and-see action returns a verdict, so
+// the agent knows "did it work" without re-seeing. Richer verdicts (page type,
+// auth state, "logged in") are layered on by brief/act in later steps.
+func (d *Delta) InferVerdict() string {
+	if d.Navigated {
+		s := "navigated to " + d.NewURL
+		if d.NewTitle != "" {
+			s += fmt.Sprintf(" %q", d.NewTitle)
+		}
+		return s
+	}
+	// A modal/dialog opening is the strongest non-navigation signal - report it
+	// first, and if a status/alert appeared alongside (common: a dialog + a
+	// toast), fold the toast text in.
+	for _, e := range d.AddedSignals {
+		if e.Role == "alertdialog" || e.Role == "dialog" {
+			name := e.Name
+			if name == "" {
+				name = e.Role
+			}
+			for _, a := range d.AddedSignals {
+				if (a.Role == "alert" || a.Role == "status") && a.Name != "" {
+					return fmt.Sprintf("dialog opened: %s; %s", name, a.Name)
+				}
+			}
+			return "dialog opened: " + name
+		}
+	}
+	for _, e := range d.AddedSignals {
+		if (e.Role == "alert" || e.Role == "status") && e.Name != "" {
+			return "status: " + e.Name
+		}
+	}
+	for _, e := range d.RemovedSignals {
+		if e.Role == "alertdialog" || e.Role == "dialog" {
+			return "dialog closed"
+		}
+	}
+	if d.HasChanges() {
+		return fmt.Sprintf("changed: +%d -%d ~%d", len(d.Added), len(d.Removed), len(d.Changed))
+	}
+	return "no visible effect"
 }

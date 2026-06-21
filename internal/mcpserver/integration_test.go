@@ -79,7 +79,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	defer cancel()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "v0.0.1"}, nil)
-	transport := &mcp.CommandTransport{Command: exec.Command(bin, "mcp")}
+	transport := &mcp.CommandTransport{Command: exec.Command(bin, "mcp", "--no-persist")}
 	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -100,7 +100,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 		t.Errorf("find: %q", find)
 	}
 	click := callTool(t, sess, ctx, "click", map[string]any{"ref": "r2"})
-	if !strings.Contains(click, "navigated:") || !strings.Contains(click, "iana.org") {
+	if !strings.Contains(click, "navigated") || !strings.Contains(click, "iana.org") {
 		t.Errorf("click act-and-see: %q", click)
 	}
 

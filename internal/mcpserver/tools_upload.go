@@ -6,7 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/internal/browser"
+	"github.com/dondai1234/agent-browser/v2/internal/browser"
 )
 
 func registerUpload(srv *mcp.Server, sess *browser.Session) {

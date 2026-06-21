@@ -1,4 +1,4 @@
-module github.com/dondai1234/agent-browser
+module github.com/dondai1234/agent-browser/v2
 
 go 1.26.4
 

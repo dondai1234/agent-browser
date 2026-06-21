@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
-	"github.com/go-json-experiment/json/jsontext"
 
-	"github.com/dondai1234/agent-browser/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
 )
 
 // resolveBackendLocked resolves a backendNodeID to a remote object ID. Caller
@@ -68,12 +69,20 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 			cur.tree.Challenge = ch
 		}
 	}
+	navVerdict := fmt.Sprintf("navigated to %s", cur.tree.URL)
+	if cur.tree.Title != "" {
+		navVerdict += fmt.Sprintf(" %q", cur.tree.Title)
+	}
+	if cur.tree.Challenge != "" {
+		navVerdict = "CHALLENGE: " + cur.tree.Challenge
+	}
+	s.recordHistoryLocked(fmt.Sprintf("navigate %s", clean), navVerdict, cur.tree.URL)
 	return cur.tree, nil
 }
 
 // mutateAndSee runs an action on the current tab, waits for the DOM to settle,
 // re-builds the tree, and returns the delta + new tree. Atomic (holds s.mu).
-func (s *Session) mutateAndSee(settle time.Duration, do func(ctx context.Context) error) (*snapshot.Delta, *snapshot.Tree, error) {
+func (s *Session) mutateAndSee(action string, settle time.Duration, do func(ctx context.Context) error) (*snapshot.Delta, *snapshot.Tree, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.curTabLocked()
@@ -81,17 +90,46 @@ func (s *Session) mutateAndSee(settle time.Duration, do func(ctx context.Context
 		return nil, nil, ErrNoSnapshot
 	}
 	before := t.tree
+	startTs := time.Now()
 	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(do)); err != nil {
 		return nil, nil, err
 	}
 	if settle > 0 {
 		time.Sleep(settle)
 	}
+	return s.finishMutationLocked(t, before, startTs, action)
+}
+
+// finishMutationLocked rebuilds the tree, computes the delta + verdict (and the
+// net: summary for non-navigation actions), records the action in the session
+// log, and returns the after-tree. Shared by mutateAndSee and Act so the verdict
+// + history logic is identical across every action path. Caller must hold s.mu.
+func (s *Session) finishMutationLocked(t *tab, before *snapshot.Tree, startTs time.Time, action string) (*snapshot.Delta, *snapshot.Tree, error) {
 	if err := s.buildTreeLocked(); err != nil {
 		return nil, nil, err
 	}
 	after := s.curTabLocked().tree
-	return snapshot.Diff(before, after), after, nil
+	d := snapshot.Diff(before, after)
+	d.Verdict = d.InferVerdict()
+	if after != nil && after.Challenge != "" {
+		// A bot-check interstitial means the action didn't achieve its intent -
+		// override the verdict so the agent sees the block first.
+		d.Verdict = "CHALLENGE: " + after.Challenge
+	} else if !d.Navigated {
+		// For non-navigation actions, fold in the XHR/Fetch responses that fired
+		// during the action window - the "did it hit the API" signal. Skipped on
+		// navigation (page load floods the buffer with asset noise) and on
+		// challenges (the verdict is the block, not the network).
+		if evts := s.recentNetLocked(t, startTs); len(evts) > 0 {
+			d.Verdict += "; net: " + summarizeNet(evts)
+		}
+	}
+	url := ""
+	if after != nil {
+		url = after.URL
+	}
+	s.recordHistoryLocked(action, d.Verdict, url)
+	return d, after, nil
 }
 
 // clickNodeLocked positions the real mouse over the element (scrollIntoView,
@@ -124,7 +162,7 @@ func (s *Session) clickNodeLocked(ctx context.Context, id runtime.RemoteObjectID
 
 // ClickAndSee clicks a ref (real mouse) and returns the delta + new tree.
 func (s *Session) ClickAndSee(ref string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	return s.mutateAndSee(fmt.Sprintf("click %s", ref), settle, func(ctx context.Context) error {
 		id, err := s.resolveRefLocked(ctx, ref)
 		if err != nil {
 			return err
@@ -135,53 +173,72 @@ func (s *Session) ClickAndSee(ref string, settle time.Duration) (*snapshot.Delta
 
 // FillAndSee sets an input value (dispatches input+change) and returns delta.
 func (s *Session) FillAndSee(ref, value string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	return s.mutateAndSee(fmt.Sprintf("fill %s =%q", ref, value), settle, func(ctx context.Context) error {
 		id, err := s.resolveRefLocked(ctx, ref)
 		if err != nil {
 			return err
 		}
-		arg, _ := json.Marshal(value)
-		_, exc, err := runtime.CallFunctionOn(
-			"function(v) { try { this.focus(); } catch(e) {} var proto = this.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; var setter = Object.getOwnPropertyDescriptor(proto, 'value').set; setter.call(this, v); this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true})); return this.value; }").
-			WithObjectID(id).
-			WithArguments([]*runtime.CallArgument{{Value: jsontext.Value(arg)}}).
-			Do(ctx)
-		if err != nil {
-			return fmt.Errorf("fill ref %q: %w", ref, err)
-		}
-		if exc != nil {
-			return fmt.Errorf("fill ref %q failed: %s", ref, exc.Text)
-		}
-		return nil
+		return s.fillNodeLocked(ctx, id, value)
 	})
 }
 
 // SelectAndSee sets a <select> value and returns the delta.
 func (s *Session) SelectAndSee(ref, value string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	return s.mutateAndSee(fmt.Sprintf("select %s =%q", ref, value), settle, func(ctx context.Context) error {
 		id, err := s.resolveRefLocked(ctx, ref)
 		if err != nil {
 			return err
 		}
-		arg, _ := json.Marshal(value)
-		_, exc, err := runtime.CallFunctionOn(
-			"function(v) { var opts=this.options, m=null; for(var i=0;i<opts.length;i++){ if(opts[i].value===v||opts[i].text===v||opts[i].textContent===v){m=opts[i];break;} } if(!m){ for(var i=0;i<opts.length;i++){ if(opts[i].textContent.indexOf(v)>=0){m=opts[i];break;} } } if(!m) return this.value; var setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(this,m.value); this.dispatchEvent(new Event('change',{bubbles:true})); return this.value; }").
-			WithObjectID(id).
-			WithArguments([]*runtime.CallArgument{{Value: jsontext.Value(arg)}}).
-			Do(ctx)
-		if err != nil {
-			return fmt.Errorf("select ref %q: %w", ref, err)
-		}
-		if exc != nil {
-			return fmt.Errorf("select ref %q failed: %s", ref, exc.Text)
+		return s.selectNodeLocked(ctx, id, value)
+	})
+}
+
+// FillMany fills several inputs by ref in one call (e.g. a whole checkout form
+// from extract form's refs), then re-snapshots once - one round-trip instead of
+// N. Refs are filled in sorted order for determinism. Returns the combined
+// delta + verdict like a single fill.
+func (s *Session) FillMany(fields map[string]string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
+	if len(fields) == 0 {
+		return nil, nil, errors.New("no fields to fill")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.curTabLocked()
+	if t == nil || t.tree == nil {
+		return nil, nil, ErrNoSnapshot
+	}
+	before := t.tree
+	startTs := time.Now()
+	refs := make([]string, 0, len(fields))
+	for r := range fields {
+		refs = append(refs, r)
+	}
+	sort.Strings(refs)
+	filled := 0
+	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		for _, ref := range refs {
+			id, e := s.resolveRefLocked(ctx, ref)
+			if e != nil {
+				return fmt.Errorf("fill ref %q: %w", ref, e)
+			}
+			if e := s.fillNodeLocked(ctx, id, fields[ref]); e != nil {
+				return e
+			}
+			filled++
 		}
 		return nil
-	})
+	})); err != nil {
+		return nil, nil, err
+	}
+	if settle > 0 {
+		time.Sleep(settle)
+	}
+	return s.finishMutationLocked(t, before, startTs, fmt.Sprintf("fill %d fields", filled))
 }
 
 // ScrollAndSee scrolls by dx/dy CSS pixels and returns the delta.
 func (s *Session) ScrollAndSee(dx, dy int, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	delta, after, err := s.mutateAndSee(fmt.Sprintf("scroll %d %d", dx, dy), settle, func(ctx context.Context) error {
 		_, exc, err := runtime.Evaluate(fmt.Sprintf("window.scrollBy(%d, %d)", dx, dy)).Do(ctx)
 		if err != nil {
 			return fmt.Errorf("scroll: %w", err)
@@ -191,6 +248,63 @@ func (s *Session) ScrollAndSee(dx, dy int, settle time.Duration) (*snapshot.Delt
 		}
 		return nil
 	})
+	if err != nil {
+		return delta, after, err
+	}
+	// Append the scroll position so the agent knows whether to keep scrolling
+	// ("more below") or stop ("at bottom") - the loop-closer for lazy-loaded
+	// lists. One cheap eval; re-lock briefly since mutateAndSee released.
+	s.mu.Lock()
+	delta.Verdict += "; scroll " + s.scrollInfoLocked(s.curTabLocked())
+	s.mu.Unlock()
+	return delta, after, nil
+}
+
+// scrollInfoLocked returns a compact scroll-position string: "fits viewport",
+// "at bottom (Npx)", or "Y/Npx (more below)". Caller must hold s.mu.
+func (s *Session) scrollInfoLocked(t *tab) string {
+	if t == nil {
+		return "?"
+	}
+	var pos [3]float64
+	if err := chromedp.Run(t.ctx, chromedp.Evaluate(`[window.scrollY||0, window.innerHeight||0, (document.documentElement?document.documentElement.scrollHeight:0)||0]`, &pos)); err != nil {
+		return "?"
+	}
+	y, vh, sh := pos[0], pos[1], pos[2]
+	if sh <= vh {
+		return "fits viewport"
+	}
+	if y+vh >= sh-2 {
+		return fmt.Sprintf("at bottom (%.0fpx)", sh)
+	}
+	return fmt.Sprintf("%.0f/%.0fpx (more below)", y, sh)
+}
+
+// ScrollToAndSee scrolls an element by ref into view (block:center) and returns
+// the delta + scroll position - for when the agent has a ref but it's off-screen
+// and wants to read/screenshot it without guessing pixel deltas.
+func (s *Session) ScrollToAndSee(ref string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
+	delta, after, err := s.mutateAndSee(fmt.Sprintf("scroll to %s", ref), settle, func(ctx context.Context) error {
+		id, err := s.resolveRefLocked(ctx, ref)
+		if err != nil {
+			return err
+		}
+		_, exc, err := runtime.CallFunctionOn(`function() { try { this.scrollIntoView({block:'center'}); } catch(e) {} return true; }`).WithObjectID(id).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("scroll to ref %q: %w", ref, err)
+		}
+		if exc != nil {
+			return fmt.Errorf("scroll to ref %q failed: %s", ref, exc.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		return delta, after, err
+	}
+	s.mu.Lock()
+	delta.Verdict += "; scroll " + s.scrollInfoLocked(s.curTabLocked())
+	s.mu.Unlock()
+	return delta, after, nil
 }
 
 // namedKeys maps named keys to code + Windows virtual key code. text is set
@@ -255,7 +369,7 @@ func parseModifiers(mods string) input.Modifier {
 // default actions (Enter submits, Escape closes, Tab moves focus, a char
 // inserts) - synthetic JS KeyboardEvents do not.
 func (s *Session) PressKeyAndSee(key, modifiers string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	return s.mutateAndSee(fmt.Sprintf("press_key %s", key), settle, func(ctx context.Context) error {
 		k, code, text, vk := keyParams(key)
 		mods := parseModifiers(modifiers)
 		if err := input.DispatchKeyEvent(input.KeyDown).
@@ -290,7 +404,7 @@ func (s *Session) hoverNodeLocked(ctx context.Context, id runtime.RemoteObjectID
 // HoverAndSee hovers an element by ref and returns the delta (e.g. a hover menu
 // appearing as Added elements).
 func (s *Session) HoverAndSee(ref string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
-	return s.mutateAndSee(settle, func(ctx context.Context) error {
+	return s.mutateAndSee(fmt.Sprintf("hover %s", ref), settle, func(ctx context.Context) error {
 		id, err := s.resolveRefLocked(ctx, ref)
 		if err != nil {
 			return err
@@ -338,50 +452,112 @@ func (s *Session) Upload(ref string, paths []string) error {
 	}))
 }
 
-// Screenshot captures the current tab's viewport as a PNG.
-func (s *Session) Screenshot() ([]byte, error) {
+// Screenshot captures the viewport (default), the full page (fullPage=true),
+// or a specific element by ref (ref set, clipped to its bounding box). The ref
+// path scrollIntoViews first, then clips a captureScreenshot to the element's
+// iframe-offset-aware viewport box.
+func (s *Session) Screenshot(fullPage bool, ref string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.curTabLocked()
 	if t == nil {
 		return nil, errors.New("no tab")
 	}
+	if ref != "" {
+		var buf []byte
+		err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			id, e := s.resolveRefLocked(ctx, ref)
+			if e != nil {
+				return e
+			}
+			res, exc, e := runtime.CallFunctionOn(`function(){try{this.scrollIntoView({block:'center'})}catch(e){}var r=this.getBoundingClientRect();var win=this.ownerDocument.defaultView;var x=r.left,y=r.top;while(win!==window.top){var f=win.frameElement;if(!f)break;var fr=f.getBoundingClientRect();x+=fr.left;y+=fr.top;win=win.parent}return [x,y,r.width,r.height]}`).WithReturnByValue(true).WithObjectID(id).Do(ctx)
+			if e != nil {
+				return fmt.Errorf("screenshot ref %q: %w", ref, e)
+			}
+			if exc != nil {
+				return fmt.Errorf("screenshot ref %q: %s", ref, exc.Text)
+			}
+			var box [4]float64
+			if res == nil || json.Unmarshal(res.Value, &box) != nil {
+				return fmt.Errorf("screenshot ref %q: could not read bounds", ref)
+			}
+			b, e := page.CaptureScreenshot().WithClip(&page.Viewport{X: box[0], Y: box[1], Width: box[2], Height: box[3], Scale: 1}).Do(ctx)
+			if e != nil {
+				return fmt.Errorf("screenshot ref %q: %w", ref, e)
+			}
+			buf = b
+			return nil
+		}))
+		if err != nil {
+			return nil, err
+		}
+		return buf, nil
+	}
 	var buf []byte
+	if fullPage {
+		if err := chromedp.Run(t.ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+			return nil, fmt.Errorf("screenshot full: %w", err)
+		}
+		return buf, nil
+	}
 	if err := chromedp.Run(t.ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
 		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 	return buf, nil
 }
 
-// Wait blocks up to d; if text is set, returns early once it appears in body.
-func (s *Session) Wait(d time.Duration, text string) error {
+// Wait blocks up to d, returning early once a condition is met. One of:
+// url (the page URL contains it - e.g. wait for a redirect to /dashboard),
+// text (the body text contains it), or gone (the body text no longer contains
+// it - e.g. a "Loading..." spinner disappearing). If none are set, just sleeps.
+// Returns a short outcome string, or an error on timeout.
+func (s *Session) Wait(d time.Duration, text, url, gone string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.curTabLocked()
 	if t == nil {
-		return errors.New("no tab")
+		return "", errors.New("no tab")
 	}
-	if text == "" {
+	if url == "" && text == "" && gone == "" {
 		if d > 0 {
 			time.Sleep(d)
 		}
-		return nil
+		return fmt.Sprintf("waited %s", d), nil
 	}
 	deadline := time.Now().Add(d)
 	for {
-		var inner string
-		if err := chromedp.Run(t.ctx, chromedp.Evaluate("document.body?document.body.innerText:''", &inner)); err != nil {
-			return fmt.Errorf("wait: %w", err)
-		}
-		if strings.Contains(inner, text) {
-			return nil
+		if url != "" {
+			var loc string
+			if err := chromedp.Run(t.ctx, chromedp.Location(&loc)); err != nil {
+				return "", fmt.Errorf("wait url: %w", err)
+			}
+			if strings.Contains(loc, url) {
+				return fmt.Sprintf("url matched: %s", loc), nil
+			}
+		} else {
+			var inner string
+			if err := chromedp.Run(t.ctx, chromedp.Evaluate("document.body?document.body.innerText:''", &inner)); err != nil {
+				return "", fmt.Errorf("wait: %w", err)
+			}
+			switch {
+			case gone != "" && !strings.Contains(inner, gone):
+				return fmt.Sprintf("%q gone", gone), nil
+			case text != "" && strings.Contains(inner, text):
+				return fmt.Sprintf("%q present", text), nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	return fmt.Errorf("wait: text %q not found within %s", text, d)
+	which := fmt.Sprintf("text %q", text)
+	if url != "" {
+		which = fmt.Sprintf("url contains %q", url)
+	} else if gone != "" {
+		which = fmt.Sprintf("%q gone", gone)
+	}
+	return "", fmt.Errorf("wait: %s not satisfied within %s", which, d)
 }
 
 // Read returns url + title, plus a ref's text (if ref given) or body text.
@@ -403,7 +579,7 @@ func (s *Session) Read(ref string, offset int) (string, error) {
 			if e != nil {
 				return e
 			}
-			res, exc, e := runtime.CallFunctionOn("function() { return this.innerText || this.textContent || ''; }").
+			res, exc, e := runtime.CallFunctionOn(`function() { var t = this.innerText || this.textContent || ''; if (this.tagName === 'A' && this.href) t += '\nhref: ' + this.href; return t; }`).
 				WithObjectID(id).Do(ctx)
 			if e != nil {
 				return fmt.Errorf("read ref %q: %w", ref, e)

@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +28,37 @@ func realWorldSetup(t *testing.T) (*mcp.ClientSession, context.Context, func()) 
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	client := mcp.NewClient(&mcp.Implementation{Name: "rw-client", Version: "v0.0.1"}, nil)
-	transport := &mcp.CommandTransport{Command: exec.Command(bin, "mcp")}
+	cmd := exec.Command(bin, "mcp", "--no-persist")
+	transport := &mcp.CommandTransport{Command: cmd}
 	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("connect: %v", err)
 	}
-	return sess, ctx, func() { sess.Close(); cancel() }
+	return sess, ctx, func() {
+		sess.Close()
+		cancel()
+		killProcTree(cmd) // ensure the server + its Chrome exit so tests don't accumulate processes
+	}
+}
+
+// killProcTree kills the server process and its children (the Chrome it
+// launched). Without this, the server can linger after a test (holding Chrome),
+// and over a ~30-test local run Chrome processes accumulate until new launches
+// hang. Windows: taskkill /T cascades to children; other OSes: kill the parent
+// (Chrome exits when the server's chromedp cancel fires on a graceful close).
+func killProcTree(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := strconv.Itoa(cmd.Process.Pid)
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/PID", pid, "/T", "/F").Run()
+	} else {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // refFor parses a find result and returns the ref (rN) of the first line whose
