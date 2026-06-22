@@ -20,7 +20,7 @@ func registerReset(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "reset",
-		Description: "Recover from a wedged or dead tab: drop the current tab (cancelling any hung operation on it) and open a fresh one, navigating to url if given. Other tabs are kept. Use this when a tool returned an operation-timeout error, or the page is an unresponsive SPA, or refs seem unusable - it is the explicit session-recovery path (no need to restart the server). Returns the new tab's orientation. If reset itself fails, the browser process is dead; restart the MCP server.",
+		Description: "Recover from a wedged or dead tab without restarting the server. If the browser is alive (the common case: a tool timed out, an SPA is unresponsive, refs seem unusable), it re-navigates the current tab to a fresh page (url, or about:blank) and KEEPS your other tabs + their logins. If the browser itself is dead, it relaunches Chrome (other tabs are lost). Returns the new page orientation. If reset itself fails, restart the MCP server.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		tree, err := sess.Reset(a.URL)

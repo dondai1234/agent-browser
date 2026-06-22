@@ -22,7 +22,9 @@ const fillJS = `function(v) { try { this.focus(); } catch(e) {} var proto = this
 
 // selectJS sets a <select> by matching an option's value OR visible text
 // (exact, then substring fallback), via the native value setter + change event.
-const selectJS = `function(v) { var opts=this.options, m=null; for(var i=0;i<opts.length;i++){ if(opts[i].value===v||opts[i].text===v||opts[i].textContent===v){m=opts[i];break;} } if(!m){ for(var i=0;i<opts.length;i++){ if(opts[i].textContent.indexOf(v)>=0){m=opts[i];break;} } } if(!m) return this.value; var setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(this,m.value); this.dispatchEvent(new Event('change',{bubbles:true})); return this.value; }`
+// Returns null when no option matches, so selectNodeLocked can report a no-op
+// (the agent must not mistake a failed select for a success).
+const selectJS = `function(v) { var opts=this.options, m=null; for(var i=0;i<opts.length;i++){ if(opts[i].value===v||opts[i].text===v||opts[i].textContent===v){m=opts[i];break;} } if(!m){ for(var i=0;i<opts.length;i++){ if(opts[i].textContent.indexOf(v)>=0){m=opts[i];break;} } } if(!m) return null; var setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(this,m.value); this.dispatchEvent(new Event('change',{bubbles:true})); return this.value; }`
 
 // fillNodeLocked sets an input/textarea value by remote object id. Caller must
 // hold s.mu. Factored out of FillAndSee so Act can fill a resolved element under
@@ -46,8 +48,9 @@ func (s *Session) fillNodeLocked(ctx context.Context, id runtime.RemoteObjectID,
 // s.mu. Factored out of SelectAndSee for Act's use.
 func (s *Session) selectNodeLocked(ctx context.Context, id runtime.RemoteObjectID, value string) error {
 	arg, _ := json.Marshal(value)
-	_, exc, err := runtime.CallFunctionOn(selectJS).
+	res, exc, err := runtime.CallFunctionOn(selectJS).
 		WithObjectID(id).
+		WithReturnByValue(true).
 		WithArguments([]*runtime.CallArgument{{Value: jsontext.Value(arg)}}).
 		Do(ctx)
 	if err != nil {
@@ -55,6 +58,11 @@ func (s *Session) selectNodeLocked(ctx context.Context, id runtime.RemoteObjectI
 	}
 	if exc != nil {
 		return fmt.Errorf("select failed: %s", exc.Text)
+	}
+	// selectJS returns null when no option matched value/text/substring; report it
+	// so the agent doesn't think a no-op select succeeded.
+	if res == nil || len(res.Value) == 0 || string(res.Value) == "null" {
+		return fmt.Errorf("select: no option matching %q (check the option values/text with see or find role=option)", value)
 	}
 	return nil
 }
@@ -79,15 +87,21 @@ func isClickableRole(role string) bool {
 // can disambiguate with nth/role or fall back to click/fill by ref.
 var errAmbiguous = errors.New("ambiguous: multiple elements match the intent; pass nth (1-based) or role to pick, or use a more specific name")
 
+// errDOMNoMatch is the DOM fallback's "nothing matched" sentinel: it tells Act
+// to fall through to the a11y no-match error instead of trying to act on a
+// zero-value candidate (which would run querySelector("") and throw).
+var errDOMNoMatch = errors.New("no DOM-attribute match")
+
 // ActResult holds an Act outcome. If Resolved is nil and Candidates is non-empty,
 // the intent was ambiguous (surface candidates). If both are empty/nil the intent
 // matched nothing. Otherwise the action ran and Delta/After carry the verdict.
 type ActResult struct {
-	Resolved   *snapshot.Element // the element acted on (nil if ambiguous/no-match)
-	Verb       string            // "click" | "fill" | "select"
-	Candidates []snapshot.Element // present when ambiguous (Resolved nil); ranked best-first
-	Delta      *snapshot.Delta
-	After      *snapshot.Tree
+	Resolved       *snapshot.Element  // the element acted on (nil if ambiguous/no-match)
+	Verb           string             // "click" | "fill" | "select"
+	Candidates     []snapshot.Element // present when an A11Y match was ambiguous (Resolved nil); ranked best-first
+	CandidatesText string             // rendered candidate list for non-a11y matches (the DOM fallback); empty for a11y matches
+	Delta          *snapshot.Delta
+	After          *snapshot.Tree
 }
 
 type scoredEl struct {
@@ -170,6 +184,13 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 // etc., fill (with value) for textbox/searchbox/spinbutton, select (with value)
 // for combobox. Returns the resolved element, the verb, and a verdict + delta
 // (same machinery as click/fill). Atomic (one lock for resolve + act + re-snapshot).
+//
+// Matching is two-tier: first the a11y name (what Chrome's AX tree computed from
+// the label/placeholder/aria-label), then, on no-match, a DOM-attribute fallback
+// over name/id/placeholder/title/aria-label so poorly-labeled inputs (no <label>,
+// no placeholder surfaced in the a11y name, only a name=/id= the agent knows from
+// HTML or extract form) are still reachable by intent. The DOM fallback runs
+// only on no-match, so the hot path pays no extra CDP round-trip.
 func (s *Session) Act(intent, value, role string, nth int, settle time.Duration) (*ActResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -177,39 +198,67 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 	if t == nil || t.tree == nil {
 		return nil, ErrNoSnapshot
 	}
-	resolved, candidates, rerr := resolveIntent(t.tree, intent, value, role, nth)
-	if rerr != nil {
-		// Ambiguous (candidates populated) or no-match (candidates empty).
-		return &ActResult{Candidates: candidates}, rerr
-	}
+	intent = strings.TrimSpace(intent)
 	before := t.tree
 	startTs := time.Now()
+
+	resolved, candidates, rerr := resolveIntent(t.tree, intent, value, role, nth)
+	if rerr != nil {
+		if len(candidates) == 0 {
+			// No a11y-name match - try the DOM-attribute fallback for
+			// poorly-labeled inputs (name/id/placeholder/title/aria-label).
+			domCand, domCands, domErr := s.resolveIntentDOMLocked(t, intent, value, role, nth)
+			switch {
+			case domErr == nil:
+				verb, actErr := s.actOnDOMLocked(t, domCand, value)
+				if actErr != nil {
+					s.recordActionErrorLocked(before, fmt.Sprintf("act %q (%s, dom)", intent, verb), actErr)
+					return &ActResult{Verb: verb}, actErr
+				}
+				if settle > 0 {
+					time.Sleep(settle)
+				}
+				delta, after, ferr := s.finishMutationLocked(t, before, startTs, fmt.Sprintf("act %q (%s, dom)", intent, verb))
+				if ferr != nil {
+					return &ActResult{Verb: verb}, ferr
+				}
+				return &ActResult{Resolved: &snapshot.Element{Ref: "dom", Role: domRoleFor(domCand), Name: domCand.Val}, Verb: verb, Delta: delta, After: after}, nil
+			case errors.Is(domErr, errDOMNoMatch):
+				// No DOM match either - fall through to the a11y no-match error below.
+			case len(domCands) > 0:
+				// Ambiguous, or nth out of range - surface the ranked candidates.
+				return &ActResult{CandidatesText: renderDOMCandidates(domCands)}, domErr
+			}
+		}
+		s.recordActionErrorLocked(before, fmt.Sprintf("act %q", intent), rerr)
+		return &ActResult{Candidates: candidates}, rerr
+	}
+
 	verb := "click"
-	// resolveRefLocked + the node action must run inside chromedp.Run so the
-	// ctx carries the cdp executor (a bare .Do(t.ctx) fails with "invalid
-	// context" - the known chromedp quirk; mutateAndSee wraps the same way).
+	var actErr error
+	// resolveRefLocked + the node action must run inside chromedp.Run so the ctx
+	// carries the cdp executor (a bare .Do(t.ctx) fails with "invalid context" -
+	// the known chromedp quirk; mutateAndSee wraps the same way).
 	switch {
 	case isFillableRole(resolved.Role):
 		if strings.TrimSpace(value) == "" {
 			return &ActResult{Resolved: &resolved}, fmt.Errorf("resolved [%s] %s %q is a %s; pass a value to fill it (or name a clickable control instead)", resolved.Ref, resolved.Role, resolved.Name, resolved.Role)
 		}
 		verb = "fill"
-		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
 			}
 			return s.fillNodeLocked(ctx, id, value)
-		})); err != nil {
-			return &ActResult{Resolved: &resolved, Verb: verb}, err
-		}
+		}))
 	case resolved.Role == "combobox" && strings.TrimSpace(value) != "":
 		// A combobox may be a native <select> (select the option) OR an ARIA
 		// combobox over a textarea/input (Google search, autocomplete widgets) -
 		// those have no .options, so selectJS no-ops on them. Probe the tag:
 		// SELECT -> select the option; otherwise fill (native value setter +
 		// input/change, which is what React/Vue autocompletes actually listen for).
-		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
@@ -224,19 +273,23 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 			}
 			verb = "fill"
 			return s.fillNodeLocked(ctx, id, value)
-		})); err != nil {
-			return &ActResult{Resolved: &resolved, Verb: verb}, err
-		}
+		}))
+	case resolved.Role == "combobox":
+		// A combobox/select with no value: clicking it usually just opens the
+		// dropdown (rarely the intent). Tell the agent to pass a value.
+		return &ActResult{Resolved: &resolved}, fmt.Errorf("resolved [%s] %s %q is a combobox; pass a value to select an option (or name a clickable control)", resolved.Ref, resolved.Role, resolved.Name)
 	default:
-		if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
 			}
 			return s.clickNodeLocked(ctx, id)
-		})); err != nil {
-			return &ActResult{Resolved: &resolved, Verb: verb}, err
-		}
+		}))
+	}
+	if actErr != nil {
+		s.recordActionErrorLocked(before, fmt.Sprintf("act %q (%s)", intent, verb), actErr)
+		return &ActResult{Resolved: &resolved, Verb: verb}, actErr
 	}
 	if settle > 0 {
 		time.Sleep(settle)
@@ -246,4 +299,226 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 		return &ActResult{Resolved: &resolved, Verb: verb}, ferr
 	}
 	return &ActResult{Resolved: &resolved, Verb: verb, Delta: delta, After: after}, nil
+}
+
+// recordActionErrorLocked appends a failed-action entry to the session log so
+// history errors=true can surface it (a click that timed out, an act that found
+// nothing, a fill that threw). Caller must hold s.mu.
+func (s *Session) recordActionErrorLocked(before *snapshot.Tree, action string, err error) {
+	url := ""
+	if before != nil {
+		url = before.URL
+	}
+	s.recordHistoryLocked(action, "error: "+err.Error(), url)
+}
+
+// intentDOMJS is the DOM-attribute fallback matcher. It reads __needle/__role
+// (set by the caller via a prefixed var declaration so the args are safely
+// JSON-encoded, no string interpolation) and returns a JSON array of ranked
+// candidates: interactive elements whose name/id/placeholder/title/aria-label
+// (or button/link text) contains the intent, each with a unique CSS selector so
+// actOnDOMLocked can re-find + act on the chosen one without a ref.
+const intentDOMJS = `(function(){
+  var needle = __needle, wantRole = __role;
+  function uniqueSel(el){
+    if (el && el.id) { try { return '#'+CSS.escape(el.id); } catch(e){} }
+    var parts=[];
+    while (el && el.nodeType===1 && el!==document.documentElement){
+      var p=el.parentNode;
+      if(!p){ parts.unshift(el.tagName.toLowerCase()); break; }
+      var idx=Array.prototype.indexOf.call(p.children, el)+1;
+      parts.unshift(el.tagName.toLowerCase()+':nth-child('+idx+')');
+      el=p;
+      if(el && el.id){ try { parts.unshift('#'+CSS.escape(el.id)); break; } catch(e){} }
+    }
+    return parts.join(' > ');
+  }
+  var tags=['input','textarea','select','button','a'];
+  var roleTags={button:['button','a'],link:['a'],textbox:['input','textarea'],searchbox:['input'],combobox:['select'],spinbutton:['input'],checkbox:['input'],radio:['input'],switch:['input'],menuitem:['button','a'],tab:['button','a'],option:['option']};
+  var out=[];
+  for(var ti=0; ti<tags.length; ti++){
+    var tag=tags[ti];
+    if(wantRole){ var allow=roleTags[wantRole]; if(!allow||allow.indexOf(tag)<0) continue; }
+    var els=document.querySelectorAll(tag);
+    for(var j=0;j<els.length;j++){
+      var el=els[j];
+      if(el.disabled) continue;
+      var type=(el.tagName==='INPUT')?(el.type||'text'):'';
+      var keys=['aria-label','placeholder','name','id','title'];
+      var best=null,bestAttr='';
+      for(var k=0;k<keys.length;k++){
+        var av;
+        if(keys[k]==='aria-label') av=el.getAttribute('aria-label')||'';
+        else if(keys[k]==='placeholder') av=el.placeholder||'';
+        else if(keys[k]==='name') av=el.name||'';
+        else if(keys[k]==='id') av=el.id||'';
+        else av=el.title||'';
+        var lv=(av||'').toLowerCase();
+        if(lv && lv.indexOf(needle)>=0){ best=av; bestAttr=keys[k]; break; }
+      }
+      if(!best){ var txt=(el.textContent||'').trim(); if(txt && txt.toLowerCase().indexOf(needle)>=0){ best=txt; bestAttr='text'; } }
+      if(!best) continue;
+      var bl=best.toLowerCase(); var sc=10; if(bl===needle) sc=100; else if(bl.indexOf(needle)===0) sc=50;
+      out.push({tag:tag,type:type,attr:bestAttr,val:best,score:sc,sel:uniqueSel(el)});
+    }
+  }
+  out.sort(function(a,b){ return b.score-a.score; });
+  return JSON.stringify(out);
+})()`
+
+// domCandidate is one DOM-attribute match from the intent fallback.
+type domCandidate struct {
+	Tag   string `json:"tag"`
+	Type  string `json:"type"`
+	Attr  string `json:"attr"`
+	Val   string `json:"val"`
+	Score int    `json:"score"`
+	Sel   string `json:"sel"`
+}
+
+// resolveIntentDOMLocked is the fallback when no a11y-name match exists: query
+// the DOM for interactive elements whose name/id/placeholder/title/aria-label
+// (or button/link text) contains the intent, ranked best-first. One CDP
+// evaluate, root document only (no iframe pierce - the a11y path handles
+// iframes via the merged tree). Returns the chosen candidate (or zero value),
+// the ranked list (for the ambiguous case), and errAmbiguous when several match
+// with no clear winner; nil error with an empty list when nothing matches.
+// Caller must hold s.mu.
+func (s *Session) resolveIntentDOMLocked(t *tab, intent, value, role string, nth int) (domCandidate, []domCandidate, error) {
+	needleJSON, _ := json.Marshal(strings.ToLower(strings.TrimSpace(intent)))
+	roleJSON, _ := json.Marshal(strings.ToLower(strings.TrimSpace(role)))
+	script := "var __needle=" + string(needleJSON) + "; var __role=" + string(roleJSON) + "; " + intentDOMJS
+	var raw string
+	if err := s.runTimeout(t, axPollTimeout, chromedp.Evaluate(script, &raw)); err != nil {
+		return domCandidate{}, nil, err
+	}
+	var cands []domCandidate
+	if strings.TrimSpace(raw) == "" || raw == "null" || raw == "[]" {
+		return domCandidate{}, nil, errDOMNoMatch
+	}
+	if err := json.Unmarshal([]byte(raw), &cands); err != nil {
+		return domCandidate{}, nil, err
+	}
+	if len(cands) == 0 {
+		return domCandidate{}, nil, errDOMNoMatch
+	}
+	if nth > 0 {
+		if nth > len(cands) {
+			return domCandidate{}, cands, fmt.Errorf("nth=%d but only %d DOM matches for %q", nth, len(cands), intent)
+		}
+		return cands[nth-1], cands, nil
+	}
+	if len(cands) == 1 || (len(cands) >= 2 && cands[0].Score-cands[1].Score >= 20) {
+		return cands[0], cands, nil
+	}
+	return domCandidate{}, cands, errAmbiguous
+}
+
+// actOnDOMLocked resolves a DOM fallback candidate's unique CSS selector to a
+// remote object id and performs the role-appropriate action (click/fill/select)
+// on it, all inside one chromedp.Run so the ctx carries the CDP executor (a bare
+// .Do(t.ctx) fails with "invalid context"). Returns the verb it performed.
+// Caller must hold s.mu.
+func (s *Session) actOnDOMLocked(t *tab, cand domCandidate, value string) (string, error) {
+	verb := "click"
+	err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		selJSON, _ := json.Marshal(cand.Sel)
+		res, exc, e := runtime.Evaluate(`(function(){ return document.querySelector(` + string(selJSON) + `); })()`).Do(ctx)
+		if e != nil {
+			return e
+		}
+		if exc != nil {
+			return fmt.Errorf("%s", exc.Text)
+		}
+		if res == nil || res.ObjectID == "" {
+			return fmt.Errorf("DOM element not found (selector %q); the page may have re-rendered - call see, then retry", cand.Sel)
+		}
+		id := res.ObjectID
+		hasValue := strings.TrimSpace(value) != ""
+		switch {
+		case cand.Tag == "select":
+			if !hasValue {
+				verb = "select"
+				return fmt.Errorf("resolved a <select> (%q); pass a value to select an option", cand.Val)
+			}
+			verb = "select"
+			return s.selectNodeLocked(ctx, id, value)
+		case cand.Tag == "textarea" || (cand.Tag == "input" && isTextInputType(cand.Type)):
+			if !hasValue {
+				verb = "fill"
+				return fmt.Errorf("resolved an input %q; pass a value to fill it (or name a clickable control)", cand.Val)
+			}
+			verb = "fill"
+			return s.fillNodeLocked(ctx, id, value)
+		default:
+			verb = "click"
+			return s.clickNodeLocked(ctx, id)
+		}
+	}))
+	return verb, err
+}
+
+// isTextInputType reports whether an <input type=...> is a text-like field that
+// fill targets (vs a checkbox/radio/submit/button/file that click targets).
+func isTextInputType(typ string) bool {
+	switch strings.ToLower(typ) {
+	case "text", "email", "tel", "url", "search", "password", "number":
+		return true
+	}
+	return false
+}
+
+// domRoleFor maps a DOM candidate's tag/type to the a11y role name used in the
+// act response (so the agent sees e.g. [dom] textbox "custcode" (fill)).
+func domRoleFor(c domCandidate) string {
+	switch {
+	case c.Tag == "select":
+		return "combobox"
+	case c.Tag == "textarea":
+		return "textbox"
+	case c.Tag == "input":
+		switch strings.ToLower(c.Type) {
+		case "checkbox":
+			return "checkbox"
+		case "radio":
+			return "radio"
+		case "search", "searchbox":
+			return "searchbox"
+		case "number":
+			return "spinbutton"
+		case "submit", "button", "image", "reset":
+			return "button"
+		default:
+			return "textbox"
+		}
+	case c.Tag == "a":
+		return "link"
+	case c.Tag == "button":
+		return "button"
+	}
+	return c.Tag
+}
+
+// renderDOMCandidates renders the DOM fallback's ranked candidates for the
+// ambiguous response (the a11y path uses RenderElements; DOM candidates have no
+// ref, so they get a [dom] tag + the matched attribute instead).
+func renderDOMCandidates(cands []domCandidate) string {
+	var b strings.Builder
+	limit := len(cands)
+	if limit > 8 {
+		limit = 8
+	}
+	for i := 0; i < limit; i++ {
+		c := cands[i]
+		fmt.Fprintf(&b, "[dom] %s", c.Tag)
+		if c.Type != "" {
+			fmt.Fprintf(&b, " type=%q", c.Type)
+		}
+		fmt.Fprintf(&b, " %s=%q", c.Attr, c.Val)
+		b.WriteByte('\n')
+	}
+	if len(cands) > 8 {
+		fmt.Fprintf(&b, "... and %d more (pass a more specific name, or role/nth to pick)\n", len(cands)-8)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

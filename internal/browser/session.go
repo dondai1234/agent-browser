@@ -88,7 +88,7 @@ type Session struct {
 	// dead is non-nil after a fatal browser error (chrome failed to start,
 	// the browser process crashed, the websocket dropped). Once set, run/runTimeout
 	// short-circuit: they return this error WITHOUT calling chromedp.Run, so a
-	// dead session is never retried. This is what prevents the chromedp panic:\t// Allocate double-closes c.allocated when a second Run retries after the
+	// dead session is never retried. This is what prevents the chromedp panic: Allocate double-closes c.allocated when a second Run retries after the
 	// first failed to start Chrome. Cleared by Reset (which relaunches the browser).
 	dead error
 
@@ -153,7 +153,7 @@ func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) e
 	}
 	if d <= 0 {
 		err := chromedp.Run(t.ctx, acts...)
-		if isFatalBrowserErr(err) {
+		if s.isFatalBrowserErr(err) {
 			s.dead = err
 		}
 		return err
@@ -175,7 +175,7 @@ func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) e
 	}()
 	select {
 	case r := <-done:
-		if isFatalBrowserErr(r.err) {
+		if s.isFatalBrowserErr(r.err) {
 			s.dead = r.err // mark dead so the next op short-circuits (no retry -> no panic)
 		}
 		return r.err
@@ -185,17 +185,23 @@ func (s *Session) runTimeout(t *tab, d time.Duration, acts ...chromedp.Action) e
 }
 
 // isFatalBrowserErr reports whether an error means the browser itself is gone
-// (not just a bad page or a timeout). Used to mark the session dead so a later
-// op doesn't retry chromedp.Run (which double-closes c.allocated and panics).
-// The op-timeout message is intentionally NOT fatal: a wedged page isn't a dead
-// browser, and the next op may still succeed (or the agent resets).
-func isFatalBrowserErr(err error) bool {
+// (not just a bad page, a timeout, or a cancelled tab). Used to mark the session
+// dead so a later op doesn't retry chromedp.Run (which double-closes
+// c.allocated and panics). "context canceled" is only fatal when the BROWSER
+// context itself is done: a single tab's ctx being cancelled (close/reset of
+// that one tab) also returns "context canceled", but the browser is fine, so
+// marking the whole session dead would force a needless reset of a healthy
+// browser. The op-timeout message is intentionally NOT fatal: a wedged page
+// isn't a dead browser, and the next op may still succeed (or the agent resets).
+func (s *Session) isFatalBrowserErr(err error) bool {
 	if err == nil {
 		return false
 	}
 	m := err.Error()
+	if strings.Contains(m, "context canceled") {
+		return s.browserCtx != nil && s.browserCtx.Err() != nil
+	}
 	return strings.Contains(m, "chrome failed to start") ||
-		strings.Contains(m, "context canceled") ||
 		strings.Contains(m, "connection refused") ||
 		strings.Contains(m, "websocket is not connected") ||
 		strings.Contains(m, "not connected to browser") ||
@@ -432,6 +438,20 @@ func (s *Session) buildTreeLocked() error {
 	return nil
 }
 
+// buildTreeFastLocked is the post-action re-snapshot: ONE AX pull, no retry.
+// finishMutationLocked uses this instead of buildTreeLocked so a click that
+// triggers a hanging navigation fails the re-snapshot in a single pull (<=8s,
+// the axPollTimeout) instead of ~16s (pull + 400ms + retry pull), and the caller
+// soft-fails it (the action fired; the page is just loading/unreachable) instead
+// of returning a hard error. Caller must hold s.mu.
+func (s *Session) buildTreeFastLocked() error {
+	t := s.curTabLocked()
+	if t == nil {
+		return errors.New("no tab")
+	}
+	return s.pullAXLocked(t)
+}
+
 // axSig returns a stable hash of the AX tree's shape + content (node count +
 // each node's role/name/value as raw JSON bytes), so the stable-poll detects
 // both structural and content changes - not just node count. (A button label
@@ -641,7 +661,16 @@ func (s *Session) resolveRefLocked(ctx context.Context, ref string) (runtime.Rem
 	if el.Backend == 0 {
 		return "", fmt.Errorf("ref %q has no backing DOM node (virtual a11y node); cannot act on it", ref)
 	}
-	return s.resolveBackendLocked(ctx, el.Backend, ref)
+	id, err := s.resolveBackendLocked(ctx, el.Backend, ref)
+	if err != nil {
+		// The page re-rendered since the snapshot and the backing DOM node is
+		// gone (dom.ResolveNode failed). Backend node ids aren't reused across
+		// re-renders, so there's no safe automatic re-target - tell the agent to
+		// re-see (free, cached) for fresh refs. Auto-guessing by name/role would
+		// risk acting on the wrong control (two "Delete" buttons, etc.).
+		return "", fmt.Errorf("ref %q is stale (the page re-rendered and the element is gone); call see to refresh refs", ref)
+	}
+	return id, nil
 }
 
 // setupTabListenersLocked installs per-tab event listeners: JS dialog
@@ -786,7 +815,7 @@ func (s *Session) History(last int, errorsOnly bool) string {
 	if errorsOnly {
 		filt := make([]historyEntry, 0, len(entries))
 		for _, e := range entries {
-			if strings.Contains(e.Verdict, "CHALLENGE") {
+			if strings.Contains(e.Verdict, "CHALLENGE") || strings.Contains(e.Verdict, "error:") {
 				filt = append(filt, e)
 			}
 		}
@@ -840,10 +869,15 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	}
 	t.tree = nil
 	// history.back/forward/reload tear down the execution context as the page
-	// navigates, so the Evaluate itself may error - ignore it; WaitReady on the
-	// new page is the real signal.
+	// navigates, so the Evaluate itself may error - ignore it. Then wait for the
+	// new page to be ready. NOTE: chromedp.WaitReady("body") can hang here on a
+	// stale execution context (bfcache-cached pages don't fire the document-
+	// updated event chromedp listens for, so its internal document state goes
+	// stale + QuerySelector never resolves). Poll readyState + body via Evaluate
+	// instead - each Evaluate re-resolves the target's current context, so it
+	// survives the context swap that breaks WaitReady.
 	_ = s.run(t, chromedp.Evaluate(js, nil))
-	if err := s.run(t, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+	if err := s.navWaitReadyLocked(t, 15*time.Second); err != nil {
 		return nil, fmt.Errorf("navigate %s: %w", action, err)
 	}
 	if err := s.buildTreeLocked(); err != nil {
@@ -870,6 +904,32 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	return cur.tree, nil
 }
 
+// navWaitReadyLocked polls document.readyState + document.body via Evaluate
+// until the page is interactive, bounded by max. Used after a JS-triggered
+// navigation (history.back/forward, location.reload) where chromedp.WaitReady
+// hangs on a stale execution context (bfcache-cached pages don't fire the
+// document-updated event chromedp tracks). Each Evaluate re-resolves the
+// target's current context, so it survives the context swap. Caller must hold
+// s.mu.
+func (s *Session) navWaitReadyLocked(t *tab, max time.Duration) error {
+	deadline := time.Now().Add(max)
+	for {
+		var ready bool
+		if err := s.runTimeout(t, 5*time.Second, chromedp.Evaluate(`document.readyState !== 'loading' && !!document.body`, &ready)); err != nil {
+			// A mid-nav context tear-down can make this error transiently; keep
+			// polling until the deadline. (isFatalBrowserErr still marks a real
+			// browser death from the Evaluate, but a transient context error on a
+			// live browser is not fatal, so the loop correctly continues.)
+		} else if ready {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("page did not become ready within %s (the navigation may have stalled; use reset to recover)", max)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // Reset is the recovery path: it tears down the whole browser (every tab + the
 // Chrome process + the chromedp session) and relaunches a fresh one, navigating
 // to url if non-empty. Use it when a tool returned an op-timeout or "browser
@@ -891,8 +951,26 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Tear down the old browser entirely (tabs + session + allocator) so the
-	// Chrome process exits + chromedp goroutines stop, then relaunch fresh.
+	browserAlive := s.dead == nil && (s.browserCtx == nil || s.browserCtx.Err() == nil)
+	if browserAlive {
+		// Lighter recovery: the browser is fine, only the current tab's last op
+		// wedged/timed out. Probe the tab with a cheap Location (bounded 5s); if
+		// it responds, the tab's command loop is usable, so re-navigate it to a
+		// fresh page (the timed-out op's goroutine is harmless - it's blocked on
+		// a dead CDP call that does not block the target's command loop). Other
+		// tabs + their logins/state are kept. If the tab's renderer is gone, the
+		// probe fails and we fall through to a full relaunch.
+		if t := s.curTabLocked(); t != nil {
+			var loc string
+			if err := s.runTimeout(t, 5*time.Second, chromedp.Location(&loc)); err == nil {
+				t.tree = nil
+				return s.finishResetLocked(url, "reset (re-navigate)")
+			}
+		}
+	}
+	// Full relaunch: the browser itself is dead/wedged, or the alive tab probe
+	// failed (renderer crash). Tear down everything + relaunch Chrome. Other
+	// tabs are lost (they were gone with the dead browser anyway).
 	s.teardownBrowserLocked()
 	s.dead = nil
 	if err := s.launchBrowserLocked(); err != nil {
@@ -900,33 +978,53 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 		s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
 		return nil, fmt.Errorf("reset: launch browser: %w", err)
 	}
+	return s.finishResetLocked(url, "reset (relaunch)")
+}
+
+// finishResetLocked navigates the current tab to url (or about:blank if none),
+// builds the tree, handles a managed-challenge wait, records history, and
+// returns the orientation. Shared by both reset paths (alive re-navigate + dead
+// full relaunch) once a fresh tab/browser is in place. Caller must hold s.mu.
+func (s *Session) finishResetLocked(url, action string) (*snapshot.Tree, error) {
 	t := s.curTabLocked()
-	action := "reset (blank tab)"
-	if url != "" {
-		action = "reset -> " + url
-		if err := s.run(t, chromedp.Navigate(url), chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
-			s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
-			return nil, fmt.Errorf("reset: navigate %s: %w", url, err)
-		}
-		if err := s.buildTreeLocked(); err != nil {
-			s.recordHistoryLocked("reset", "reset failed: "+err.Error(), url)
-			return nil, fmt.Errorf("reset: %w", err)
-		}
-		c := s.curTabLocked()
-		if c.tree != nil {
-			c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
-			if c.tree.Challenge != "" {
-				if s.waitForChallengeClearLocked(c, 8*time.Second) {
-					if err := s.buildTreeLocked(); err == nil {
-						c = s.curTabLocked()
-						c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
-					}
+	if t == nil {
+		return nil, errors.New("no tab after reset")
+	}
+	target := url
+	if target == "" {
+		target = "about:blank"
+	}
+	if err := s.run(t, chromedp.Navigate(target), chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		s.recordHistoryLocked(action, "reset failed: "+err.Error(), url)
+		return nil, fmt.Errorf("reset: navigate %s: %w", target, err)
+	}
+	if err := s.buildTreeLocked(); err != nil {
+		s.recordHistoryLocked(action, "reset failed: "+err.Error(), url)
+		return nil, fmt.Errorf("reset: %w", err)
+	}
+	c := s.curTabLocked()
+	if c.tree != nil {
+		c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
+		if c.tree.Challenge != "" {
+			if s.waitForChallengeClearLocked(c, 8*time.Second) {
+				if err := s.buildTreeLocked(); err == nil {
+					c = s.curTabLocked()
+					c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
 				}
 			}
 		}
 	}
-	s.recordHistoryLocked(action, "reset: browser relaunched", url)
-	return s.curTabLocked().tree, nil
+	verdict := "reset: fresh tab"
+	if c.tree != nil {
+		if url != "" {
+			verdict = fmt.Sprintf("reset -> navigated to %s", c.tree.URL)
+		}
+		if c.tree.Challenge != "" {
+			verdict = "reset -> CHALLENGE: " + c.tree.Challenge
+		}
+	}
+	s.recordHistoryLocked(action, verdict, url)
+	return c.tree, nil
 }
 
 // Where returns a ~30-token "you are here" re-orientation: current URL, page
@@ -948,6 +1046,13 @@ func (s *Session) Where() string {
 		fmt.Fprintf(&b, "CHALLENGE: %s\n", tr.Challenge)
 	}
 	fmt.Fprintf(&b, "page: %s | auth: %s\n", tr.PageType(), tr.AuthState())
+	{
+		id := t.id
+		if t.label != "" {
+			id += fmt.Sprintf(" (%q)", t.label)
+		}
+		fmt.Fprintf(&b, "tab: %s of %d\n", id, len(s.tabs))
+	}
 	if len(s.history) > 0 {
 		last := s.history[len(s.history)-1]
 		fmt.Fprintf(&b, "last: #%d %s | %s\n", last.Step, last.Action, last.Verdict)

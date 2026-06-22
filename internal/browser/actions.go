@@ -92,6 +92,11 @@ func (s *Session) mutateAndSee(action string, settle time.Duration, do func(ctx 
 	before := t.tree
 	startTs := time.Now()
 	if err := s.run(t, chromedp.ActionFunc(do)); err != nil {
+		url := ""
+		if before != nil {
+			url = before.URL
+		}
+		s.recordHistoryLocked(action, "error: "+err.Error(), url)
 		return nil, nil, err
 	}
 	if settle > 0 {
@@ -105,8 +110,21 @@ func (s *Session) mutateAndSee(action string, settle time.Duration, do func(ctx 
 // log, and returns the after-tree. Shared by mutateAndSee and Act so the verdict
 // + history logic is identical across every action path. Caller must hold s.mu.
 func (s *Session) finishMutationLocked(t *tab, before *snapshot.Tree, startTs time.Time, action string) (*snapshot.Delta, *snapshot.Tree, error) {
-	if err := s.buildTreeLocked(); err != nil {
-		return nil, nil, err
+	if err := s.buildTreeFastLocked(); err != nil {
+		// The action fired but the page is navigating/wedged and won't re-snapshot
+		// in one pull (a click triggered a hanging nav, a challenge stalled, the
+		// renderer tore down mid-load). That's not an action failure - return a
+		// soft verdict so the agent knows the click/fill happened and calls see to
+		// get fresh refs, instead of a ~16s hard error that reads like the click
+		// failed. The before-tree's refs may be stale (the page changed), so after
+		// is nil and deltaOut renders just the verdict line.
+		url := ""
+		if before != nil {
+			url = before.URL
+		}
+		soft := &snapshot.Delta{Verdict: "action fired; page is loading or unreachable - call see to refresh refs"}
+		s.recordHistoryLocked(action, soft.Verdict, url)
+		return soft, nil, nil
 	}
 	after := s.curTabLocked().tree
 	d := snapshot.Diff(before, after)
@@ -389,11 +407,29 @@ func validateKeyPress(key string) error {
 // inserts) - synthetic JS KeyboardEvents do not. To TYPE TEXT into a field use
 // fill (or act with a value), not press_key: press_key takes ONE named key or
 // ONE character, not a string.
-func (s *Session) PressKeyAndSee(key, modifiers string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
+func (s *Session) PressKeyAndSee(ref, key, modifiers string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
 	if err := validateKeyPress(key); err != nil {
 		return nil, nil, err
 	}
-	return s.mutateAndSee(fmt.Sprintf("press_key %s", key), settle, func(ctx context.Context) error {
+	action := fmt.Sprintf("press_key %s", key)
+	if ref != "" {
+		action = fmt.Sprintf("press_key %s @%s", key, ref)
+	}
+	return s.mutateAndSee(action, settle, func(ctx context.Context) error {
+		// Optional: focus a specific element first so the key lands on it (e.g.
+		// press Enter on a chosen input to submit its form, without a separate
+		// click/fill). Uses the native .focus(), which moves focus + fires focus.
+		if ref != "" {
+			id, err := s.resolveRefLocked(ctx, ref)
+			if err != nil {
+				return err
+			}
+			if _, exc, e := runtime.CallFunctionOn(`function(){ try { this.focus(); } catch(e){} return true; }`).WithObjectID(id).Do(ctx); e != nil {
+				return fmt.Errorf("focus ref %q: %w", ref, e)
+			} else if exc != nil {
+				return fmt.Errorf("focus ref %q: %s", ref, exc.Text)
+			}
+		}
 		k, code, text, vk := keyParams(key)
 		mods := parseModifiers(modifiers)
 		if err := input.DispatchKeyEvent(input.KeyDown).
@@ -548,6 +584,11 @@ func (s *Session) Wait(d time.Duration, text, url, gone string) (string, error) 
 		}
 		return fmt.Sprintf("waited %s", d), nil
 	}
+	if d <= 0 {
+		// A condition was set but no seconds - default so it isn't an instant
+		// timeout (a common agent slip: wait url=/dashboard with seconds=0).
+		d = 10 * time.Second
+	}
 	deadline := time.Now().Add(d)
 	for {
 		if url != "" {
@@ -669,7 +710,7 @@ func (s *Session) Eval(script string) (string, error) {
 	}
 	var out string
 	if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
-		res, exc, err := runtime.Evaluate(script).Do(ctx)
+		res, exc, err := runtime.Evaluate(script).WithReturnByValue(true).Do(ctx)
 		if err != nil {
 			return fmt.Errorf("eval: %w", err)
 		}
@@ -677,13 +718,27 @@ func (s *Session) Eval(script string) (string, error) {
 			return fmt.Errorf("eval failed: %s", exc.Text)
 		}
 		if res != nil && len(res.Value) > 0 {
-			out = string(res.Value)
+			out = maybeUnquoteJSONString(res.Value)
 		}
 		return nil
 	})); err != nil {
 		return "", err
 	}
 	return out, nil
+}
+
+// maybeUnquoteJSONString returns the string value if b is a JSON string literal
+// (so eval "document.title" returns Title, not "Title"), else the raw bytes
+// (objects/numbers/bools stay as their JSON). Objects are NOT touched: an
+// eval returning {"a":1} keeps its braces.
+func maybeUnquoteJSONString(b []byte) string {
+	if len(b) >= 2 && b[0] == '"' && b[len(b)-1] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err == nil {
+			return s
+		}
+	}
+	return string(b)
 }
 
 func truncate(s string, n int) string {

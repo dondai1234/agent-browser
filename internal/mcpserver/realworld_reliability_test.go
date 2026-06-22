@@ -278,7 +278,7 @@ func TestReliabilityComboboxAriaFill(t *testing.T) {
 	}
 	// Verify the value actually landed in the textarea.
 	val := callTool(t, sess, ctx, "eval", map[string]any{"script": `document.getElementById('cb').value`})
-	// eval returns a JSON-encoded string, so it comes back as "hello world".
+	// eval unquotes string results, so the value comes back as hello world.
 	if !strings.Contains(val, "hello world") {
 		t.Errorf("ARIA combobox value after act: expected \"hello world\", got: %q", val)
 	}

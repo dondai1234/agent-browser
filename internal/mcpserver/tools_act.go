@@ -21,8 +21,8 @@ func registerAct(srv *mcp.Server, sess *browser.Session) {
 		SettleMs int    `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150; raise for slow SPAs)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "act",
-		Description: "Act by intent: pass a control's name (e.g. \"Sign in\", \"Username\", \"Add to cart\"); the tool resolves it on the cached snapshot with local heuristics (no LLM) and performs the default action for its role - click buttons/links, fill textbox/searchbox (pass value), select combobox (pass value) - returning a verdict + delta. Collapses find + click/fill + see into one call. If several controls match it returns the ranked candidates; disambiguate with nth or role, or use click/fill by ref. The response names the resolved ref + verb so you stay in control.",
+		Name:        "act",
+		Description: "Act by intent: pass a control's name (e.g. \"Sign in\", \"Username\", \"Add to cart\"); the tool resolves it on the cached snapshot with local heuristics (no LLM) and performs the default action for its role - click buttons/links, fill textbox/searchbox (pass value), select combobox (pass value) - returning a verdict + delta. Collapses find + click/fill + see into one call. If several controls match it returns the ranked candidates; disambiguate with nth or role, or use click/fill by ref. Two-tier matching: first the a11y name (label/placeholder/aria-label), then, on no match, the DOM name/id/placeholder/title/aria-label - so poorly-labeled inputs (only a name=/id= you know from HTML or extract form) are still reachable by intent. The response names the resolved ref + verb so you stay in control.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		if strings.TrimSpace(a.Intent) == "" {
@@ -34,7 +34,9 @@ func registerAct(srv *mcp.Server, sess *browser.Session) {
 			// surface the message, and append the candidate list when ambiguous so
 			// the agent can disambiguate without a separate find.
 			msg := err.Error()
-			if res != nil && len(res.Candidates) > 0 {
+			if res != nil && res.CandidatesText != "" {
+				msg += "\nmatches:\n" + res.CandidatesText
+			} else if res != nil && len(res.Candidates) > 0 {
 				limit := len(res.Candidates)
 				if limit > 8 {
 					limit = 8

@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.0.9 - 2026-06-22 (flawless act + hardened click + agent QoL)
+
+A live-agent test (opencode) found `act` timing out on certain form layouts and `click` timing out enough to need `reset`. This release makes `act` flawless on poorly-labeled forms, hardens every action against wedging pages, fixes a latent `navigate back/forward/reload` hang, and adds agent QoL across the tool surface. 12 new live regression tests (gated by `AGENT_BROWSER_INTEGRATION=1`); full live suite green; `govulncheck` 0 reachable.
+
+### `act` flawless (the headline)
+
+- **DOM-attribute fallback.** `act` matched only the a11y name (what Chrome's AX tree computed from the label/placeholder/aria-label). An input with NO a11y name (no `<label>`, no placeholder, no aria-label - only a `name=`/`id=` the agent knows from HTML or `extract form`) was unreachable by intent. `act` now falls back to a DOM scan over `name`/`id`/`placeholder`/`title`/`aria-label` (and button/link text) on no a11y match - one extra CDP round-trip, only on no-match (the hot path is unchanged). Reproduced + fixed: `act "custcode"` on a name-only input now resolves `[dom] textbox "custcode" (fill)`.
+- **Combobox with no value** now errors clearly ("pass a value to select an option") instead of clicking the dropdown open.
+
+### Action hardening (the `click` wedge fix)
+
+- **Soft-fail post-action re-snapshot.** A click/fill/`act` that fires but lands on a hanging navigation used to spend ~16s (8s AX-pull x 2 with retry) then return an `isError` that read like the click failed. The re-snapshot now does ONE pull (<=8s) and, on failure, returns a SOFT verdict ("action fired; page is loading or unreachable - call see to refresh refs") - the action succeeded; the agent re-sees for fresh refs. Reproduced: a click into a never-responding endpoint now returns in ~8s as a soft verdict (was 16.9s `isError`), and the session stays usable (a fresh navigate works immediately, no `reset` needed).
+- **`navigate back/forward/reload` fixed (latent bug).** `chromedp.WaitReady("body")` after a JS-triggered `history.back()/forward()/location.reload()` hangs on a stale execution context (bfcache-cached pages don't fire the document-updated event chromedp tracks). Replaced with a `readyState` + `document.body` JS poll that re-resolves the target's context each call. This was failing reliably (30s timeout) on both local servers and real sites; now ~10-20s and correct.
+- **`isFatalBrowserErr` hardened.** "context canceled" is now only fatal when the browser session ctx itself is done, not when a single tab's ctx is cancelled (a tab close/reset, a mid-nav context tear-down). The old classification could mark a healthy browser dead + force a needless `reset`. This is also what lets the back/forward poll survive a transient mid-nav context error.
+
+### Correctness
+
+- **`select` errors on a no-match option** instead of silently no-op'ing (the old `selectJS` returned the old value with no error; the agent couldn't tell the option wasn't found).
+- **Failed actions are recorded in `history`.** `history errors=true` now shows blocked (CHALLENGE) and failed (`error:`) actions - a click that timed out, an `act` that found nothing, a fill that threw - not just CHALLENGE verdicts.
+
+### Less-destructive `reset`
+
+- `reset` no longer always relaunches the whole browser. If the browser is alive (the common case: a tool timed out, an SPA is unresponsive), it re-navigates the CURRENT tab to a fresh page (`url`, or `about:blank`) and KEEPS your other tabs + their logins. It only does a full Chrome relaunch (other tabs lost) when the browser is actually dead. Best of the v2.0.1 new-tab swap + the v2.0.2 full-relaunch recovery.
+
+### Agent QoL
+
+- **`press_key` optional `ref`**: focus a specific element first, so `press_key Enter ref=r3` submits that input's form without a separate click/fill.
+- **`wait` default seconds**: `wait url=/dashboard` with `seconds=0` defaults to 10s instead of an instant timeout (a common agent slip).
+- **`eval` unquotes string results** (`document.title` -> `Title`, not `"Title"`) and now serializes object results to JSON (objects previously returned empty, by reference).
+- **`where` shows the current tab** (id + label + tab count) for multi-tab orientation.
+
+### Hygiene
+
+- Fixed a comment typo in the `dead`-field doc (a literal `\t//` baked into the comment text).
+
 ## v2.0.3 - 2026-06-21 (reliability: the NewTab fix)
 
 v2.0.2 fixed the locked-profile crash, but a live opencode test then surfaced that **`tabs new` crashed the session** ("chrome failed to start"). Root cause: the v2.0.1 first-tab change made the first tab `NewContext(browserCtx)`, so chromedp set the `Browser` on the *first tab's* context, not on `browserCtx`. `NewTab` derived new tabs from `s.browserCtx` (whose `Browser` was nil), so chromedp thought each new tab was the "first" context and **launched a second Chrome** - which failed on the locked persistent profile.

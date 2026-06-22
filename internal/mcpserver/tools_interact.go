@@ -25,6 +25,12 @@ func deltaOut(delta *snapshot.Delta, after *snapshot.Tree) string {
 		}
 		return out
 	}
+	if after == nil {
+		// Soft-fail: the action fired but the page wouldn't re-snapshot in one
+		// pull (navigating/wedged); the verdict already says to call see. Don't
+		// append a stale/no-changes line that would contradict it.
+		return out
+	}
 	out += delta.Render()
 	return out
 }
@@ -126,18 +132,19 @@ func registerScroll(srv *mcp.Server, sess *browser.Session) {
 func registerPressKey(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
 		Key       string `json:"key" jsonschema:"the key to press: a named key (Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space) or a single character (a, 1, /)"`
+		Ref       string `json:"ref,omitempty" jsonschema:"optional element ref to focus first (e.g. r3), so the key presses on that field - useful to press Enter on a specific input to submit its form without a separate click/fill"`
 		Modifiers string `json:"modifiers,omitempty" jsonschema:"modifier keys, '+'-joined: ctrl, shift, alt, meta (e.g. \"ctrl\", \"ctrl+shift\"); default none"`
 		SettleMs  int    `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "press_key",
-		Description: "Press a key on the focused element (real CDP key event, so native defaults fire: Enter submits a form, Escape closes a modal, Tab moves focus, a char inserts). No ref - it acts on whatever is focused (focus first with fill/click/eval). Returns a verdict + the delta. Prefer this over eval KeyboardEvent, which does NOT trigger native behavior.",
+		Description: "Press a key on the focused element (real CDP key event, so native defaults fire: Enter submits a form, Escape closes a modal, Tab moves focus, a char inserts). By default it acts on whatever is focused (focus first with fill/click). Pass ref to focus a specific element first - e.g. press_key Enter ref=r3 to submit the form from that input. Returns a verdict + the delta. Prefer this over eval KeyboardEvent, which does NOT trigger native behavior.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		if a.Key == "" {
 			return errResult(fmt.Errorf("key required")), nil, nil
 		}
-		delta, after, err := sess.PressKeyAndSee(a.Key, a.Modifiers, settleDur(a.SettleMs))
+		delta, after, err := sess.PressKeyAndSee(a.Ref, a.Key, a.Modifiers, settleDur(a.SettleMs))
 		if err != nil {
 			return errResult(err), nil, nil
 		}
