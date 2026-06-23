@@ -14,3 +14,6 @@ Thumbs.db
 # head-to-head / stray artifacts
 *.exe
 .playwright-mcp/
+
+# internal project status (not shipped)
+STATUS.md
