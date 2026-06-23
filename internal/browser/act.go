@@ -154,12 +154,19 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 	}
 	sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
 
-	// nth: explicit 1-based pick from the ranked list.
-	if nth > 0 {
-		if nth > len(scored) {
+	// nth: explicit pick from the ranked list. nth>0 is 1-based from the top
+	// (nth=1 = best match); nth<0 is from the end (nth=-1 = last match, -2 =
+	// second-last) - the "add the priciest of N identical Add-to-cart buttons"
+	// case without the agent having to count.
+	if nth != 0 {
+		idx := nth - 1
+		if nth < 0 {
+			idx = len(scored) + nth // nth=-1 -> len-1 (last)
+		}
+		if idx < 0 || idx >= len(scored) {
 			return snapshot.Element{}, nil, fmt.Errorf("nth=%d but only %d matches for %q", nth, len(scored), intent)
 		}
-		return scored[nth-1].el, nil, nil
+		return scored[idx].el, nil, nil
 	}
 	if len(scored) == 1 {
 		return scored[0].el, nil, nil
@@ -402,11 +409,15 @@ func (s *Session) resolveIntentDOMLocked(t *tab, intent, value, role string, nth
 	if len(cands) == 0 {
 		return domCandidate{}, nil, errDOMNoMatch
 	}
-	if nth > 0 {
-		if nth > len(cands) {
+	if nth != 0 {
+		idx := nth - 1
+		if nth < 0 {
+			idx = len(cands) + nth
+		}
+		if idx < 0 || idx >= len(cands) {
 			return domCandidate{}, cands, fmt.Errorf("nth=%d but only %d DOM matches for %q", nth, len(cands), intent)
 		}
-		return cands[nth-1], cands, nil
+		return cands[idx], cands, nil
 	}
 	if len(cands) == 1 || (len(cands) >= 2 && cands[0].Score-cands[1].Score >= 20) {
 		return cands[0], cands, nil

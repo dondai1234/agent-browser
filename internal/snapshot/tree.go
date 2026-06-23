@@ -15,6 +15,7 @@ package snapshot
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 
@@ -60,6 +61,7 @@ type Tree struct {
 	Headings  []Element // heading elements only
 	Signals   []Element // live-region/modal nodes (alert/status/dialog) kept for verdict detection only - never rendered, never get a ref
 	Counts    map[string]int
+	Signature uint64 // FNV-1a over the ordered Elems (role,name,value); lets Diff detect a URL-stable reorder/content shift (sort/SPA re-render) the backend-id element diff misses
 }
 
 // signalRoles are live-region/modal roles that carry an outcome signal (a
@@ -131,7 +133,27 @@ func BuildTree(nodes []*accessibility.Node) *Tree {
 			t.Signals = append(t.Signals, Element{Role: role, Name: name, Value: val, Backend: backend, Props: props})
 		}
 	}
+	t.Signature = t.computeSignature()
 	return t
+}
+
+// computeSignature is an order-sensitive content hash over the kept Elems'
+// (role, name, value). The same DOM yields the same signature (Chrome's AX
+// tree is deterministic in DOM order), so a signature change between two trees
+// means the page content/order actually shifted - the signal a verdict needs to
+// say "sort/filter happened" when no element was added or removed (a pure
+// reorder leaves the backend-id set unchanged, so the element diff sees nothing).
+func (t *Tree) computeSignature() uint64 {
+	h := fnv.New64a()
+	for _, e := range t.Elems {
+		h.Write([]byte(e.Role))
+		h.Write([]byte{0})
+		h.Write([]byte(e.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(e.Value))
+		h.Write([]byte{1})
+	}
+	return h.Sum64()
 }
 
 func (t *Tree) addElement(role, name, val string, backend int64, props map[accessibility.PropertyName]string) Element {

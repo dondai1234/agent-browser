@@ -84,15 +84,23 @@ func registerSee(srv *mcp.Server, sess *browser.Session) {
 
 func registerFind(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Role  string `json:"role,omitempty" jsonschema:"a11y role to filter by: button, link, textbox, checkbox, menuitem, option, tab, ..."`
-		Text  string `json:"text,omitempty" jsonschema:"name substring to filter by (case-insensitive); or exact name if exact=true"`
-		Exact bool   `json:"exact,omitempty" jsonschema:"match the name exactly (case-insensitive) instead of substring"`
+		Role     string `json:"role,omitempty" jsonschema:"a11y role to filter by: button, link, textbox, checkbox, menuitem, option, tab, ..."`
+		Text     string `json:"text,omitempty" jsonschema:"name substring to filter by (case-insensitive); or exact name if exact=true"`
+		Exact    bool   `json:"exact,omitempty" jsonschema:"match the name exactly (case-insensitive) instead of substring"`
+		Selector string `json:"selector,omitempty" jsonschema:"CSS selector to query the DOM directly (e.g. \"div[role=widget]\", \".btn-checkout\") - the escape hatch for elements the a11y tree does NOT surface (custom widgets, presentational nodes). Returns [css] lines with a sel= you can pass to click/fill/act's selector param. Mutually exclusive with role/text/exact."`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "find",
-		Description: "Find interactive elements by role and/or name from the cached snapshot - free (no page reload). Returns matching elements with refs (e.g. r12) to pass to click/fill/select. Reaches into same-origin iframes (shown with an 'in \"framename\"' tag). Omit both role and text to list every interactive element (can be large - prefer a filter). Use exact=true to match the name exactly (avoids substring false positives like 'more' matching '...more than...').",
+		Description: "Find interactive elements by role and/or name from the cached snapshot - free (no page reload). Returns matching elements with refs (e.g. r12) to pass to click/fill/select. Reaches into same-origin iframes (shown with an 'in \"framename\"' tag). Omit both role and text to list every interactive element (can be large - prefer a filter). Use exact=true to match the name exactly (avoids substring false positives like 'more' matching '...more than...'). Pass selector=\"<css>\" to query the DOM directly instead - the escape hatch for elements the a11y tree does NOT surface (custom widgets, presentational nodes); returns [css] lines with a sel= you pass to click/fill/act's selector param.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+		if sel := strings.TrimSpace(a.Selector); sel != "" {
+			matches, err := sess.FindSelector(sel)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return textResult(browser.RenderSelectorMatches(matches)), nil, nil
+		}
 		tree := sess.Tree()
 		if tree == nil {
 			return errResult(browser.ErrNoSnapshot), nil, nil

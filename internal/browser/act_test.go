@@ -86,6 +86,36 @@ func TestResolveIntentNthOutOfRange(t *testing.T) {
 	}
 }
 
+func TestResolveIntentNthNegative(t *testing.T) {
+	// Six identical "Add to cart" buttons (the saucedemo inventory case). nth=-1
+	// picks the LAST (priciest after a price-asc sort), -2 the second-last, without
+	// the agent having to count. Out-of-range negatives error.
+	tr := treeWith(
+		el("r1", "button", "Add to cart", 1),
+		el("r2", "button", "Add to cart", 2),
+		el("r3", "button", "Add to cart", 3),
+		el("r4", "button", "Add to cart", 4),
+		el("r5", "button", "Add to cart", 5),
+		el("r6", "button", "Add to cart", 6),
+	)
+	got, _, err := resolveIntent(tr, "Add to cart", "", "", -1)
+	if err != nil || got.Ref != "r6" {
+		t.Fatalf("nth=-1 should pick r6 (last), got ref=%q err=%v", got.Ref, err)
+	}
+	got, _, err = resolveIntent(tr, "Add to cart", "", "", -2)
+	if err != nil || got.Ref != "r5" {
+		t.Fatalf("nth=-2 should pick r5 (second-last), got ref=%q err=%v", got.Ref, err)
+	}
+	got, _, err = resolveIntent(tr, "Add to cart", "", "", -6)
+	if err != nil || got.Ref != "r1" {
+		t.Fatalf("nth=-6 should pick r1 (first, wraps to start), got ref=%q err=%v", got.Ref, err)
+	}
+	_, _, err = resolveIntent(tr, "Add to cart", "", "", -7)
+	if err == nil {
+		t.Fatal("nth=-7 (only 6 matches) should error")
+	}
+}
+
 func TestResolveIntentNoMatch(t *testing.T) {
 	tr := treeWith(el("r1", "button", "Sign in", 1))
 	got, cands, err := resolveIntent(tr, "Checkout", "", "", 0)

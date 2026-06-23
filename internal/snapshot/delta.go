@@ -33,6 +33,7 @@ type Delta struct {
 	Changed   []Element // same Backend, name/value differs (NEW refs, usable)
 	AddedSignals   []Element // live-region/modal nodes that appeared (toast/dialog opened)
 	RemovedSignals []Element // live-region/modal nodes that vanished (dialog closed)
+	ContentChanged bool      // URL-stable content/order shift (sort/filter/SPA re-render) detected via Tree.Signature; the backend-id element diff misses a pure reorder
 	Verdict   string // one-line semantic outcome ("navigated to ...", "dialog opened: ...", "no visible effect"); set by the browser layer via InferVerdict + challenge/network augmentation
 }
 
@@ -101,6 +102,13 @@ func Diff(before, after *Tree) *Delta {
 			d.RemovedSignals = append(d.RemovedSignals, e)
 		}
 	}
+	// URL-stable reorder/content shift (sort, filter, SPA re-render): the same
+	// backend-id set is present, so the element diff sees no add/remove/changed,
+	// but the ordered content signature changed. Surface it so the verdict does
+	// not read "no visible effect" when the page actually re-sorted.
+	if before.Signature != 0 && after.Signature != 0 && before.Signature != after.Signature {
+		d.ContentChanged = true
+	}
 	return d
 }
 
@@ -130,6 +138,9 @@ func (d *Delta) Render() string {
 		return s
 	}
 	if !d.HasChanges() {
+		if d.ContentChanged {
+			return "page updated (URL stable; e.g. sort/filter/SPA re-render) - call see to refresh refs"
+		}
 		return "no changes (no visible effect; call see to refresh refs if you expected one)"
 	}
 	var b strings.Builder
@@ -222,6 +233,9 @@ func (d *Delta) InferVerdict() string {
 	}
 	if d.HasChanges() {
 		return fmt.Sprintf("changed: +%d -%d ~%d", len(d.Added), len(d.Removed), len(d.Changed))
+	}
+	if d.ContentChanged {
+		return "page updated (URL stable; e.g. sort/filter/SPA re-render) - call see to refresh refs"
 	}
 	return "no visible effect"
 }

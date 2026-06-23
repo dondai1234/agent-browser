@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -37,14 +38,25 @@ func deltaOut(delta *snapshot.Delta, after *snapshot.Tree) string {
 
 func registerClick(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Ref      string `json:"ref" jsonschema:"element ref to click (e.g. r46)"`
+		Ref      string `json:"ref,omitempty" jsonschema:"element ref to click (e.g. r46). Mutually exclusive with selector."`
+		Selector string `json:"selector,omitempty" jsonschema:"CSS selector to click directly (e.g. \"div[role=widget]\", \"#x > button\") - the escape hatch for elements the a11y tree does NOT surface. Mutually exclusive with ref."`
 		SettleMs int    `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150; raise for slow SPAs)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "click",
-		Description: "Click an element by ref (moves the real mouse onto it, then clicks). Returns a verdict + the delta (only what changed); on navigation the verdict says 'navigated to <url>' and the new page orientation follows. Act-and-see: you usually don't need to call see after. If the ref is gone the error says so - re-see.",
+		Description: "Click an element by ref or CSS selector (moves the real mouse onto it, then clicks). Returns a verdict + the delta (only what changed); on navigation the verdict says 'navigated to <url>' and the new page orientation follows. Act-and-see: you usually don't need to call see after. The selector path reaches elements the a11y tree drops (custom widgets, presentational nodes). If the ref/selector is gone the error says so - re-see.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+		if sel := strings.TrimSpace(a.Selector); sel != "" {
+			delta, after, err := sess.ClickSelector(sel, settleDur(a.SettleMs))
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return textResult(deltaOut(delta, after)), nil, nil
+		}
+		if a.Ref == "" {
+			return errResult(fmt.Errorf("click needs a ref or a selector")), nil, nil
+		}
 		delta, after, err := sess.ClickAndSee(a.Ref, settleDur(a.SettleMs))
 		if err != nil {
 			return errResult(err), nil, nil
@@ -55,9 +67,10 @@ func registerClick(srv *mcp.Server, sess *browser.Session) {
 
 func registerFill(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Ref      string            `json:"ref,omitempty" jsonschema:"element ref of the input/textarea to fill (single-field mode)"`
+		Ref      string            `json:"ref,omitempty" jsonschema:"element ref of the input/textarea to fill (single-field mode). Mutually exclusive with selector."`
+		Selector string            `json:"selector,omitempty" jsonschema:"CSS selector of the input/textarea to fill (single-field mode) - the escape hatch for elements the a11y tree does NOT surface. Mutually exclusive with ref."`
 		Value    string            `json:"value,omitempty" jsonschema:"value to set (single-field mode)"`
-		Fields   map[string]string `json:"fields,omitempty" jsonschema:"a {ref: value} map to fill many inputs in one call (e.g. a whole checkout form from extract form); one round-trip + one delta instead of N. Takes priority over ref/value."`
+		Fields   map[string]string `json:"fields,omitempty" jsonschema:"a {ref: value} map to fill many inputs in one call (e.g. a whole checkout form from extract form); one round-trip + one delta instead of N. Takes priority over ref/value/selector."`
 		SettleMs int               `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150; raise for slow SPAs or to capture autocomplete)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
@@ -72,8 +85,15 @@ func registerFill(srv *mcp.Server, sess *browser.Session) {
 			}
 			return textResult(deltaOut(delta, after)), nil, nil
 		}
-		if a.Ref == "" {
-			return errResult(fmt.Errorf("fill needs either ref+value (single field) or fields={ref:value} (multi)")), nil, nil
+		if a.Ref == "" && strings.TrimSpace(a.Selector) == "" {
+			return errResult(fmt.Errorf("fill needs either ref+value, selector+value (single field), or fields={ref:value} (multi)")), nil, nil
+		}
+		if sel := strings.TrimSpace(a.Selector); sel != "" {
+			delta, after, err := sess.FillSelector(sel, a.Value, settleDur(a.SettleMs))
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return textResult(deltaOut(delta, after)), nil, nil
 		}
 		delta, after, err := sess.FillAndSee(a.Ref, a.Value, settleDur(a.SettleMs))
 		if err != nil {

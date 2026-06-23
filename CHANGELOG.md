@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.2.0 - 2026-06-23 (reliability + optimization: sharper verdicts, nth-from-end, CSS-selector escape hatch)
+
+A live head-to-head vs charlotte (the closest direct competitor - same token-efficient, AX-tree-first thesis) surfaced three concrete improvements. This release ships all three, verified against a clean re-run of the charlotte comparison.
+
+### Sharper verdict on URL-stable reorders (the sort/SPA complaint)
+
+A click that reorders the SAME DOM nodes (a product sort, a filter, an SPA re-render) leaves the backend-id set unchanged, so the element diff saw no add/remove/changed and the verdict read "no visible effect" - misleading on a sort that clearly happened. v2.2 adds an order-sensitive content signature (FNV-1a over the kept elements' role+name+value) to each tree; `Diff` sets `ContentChanged` when the signature shifts but no element was added/removed, and `InferVerdict` now returns **"page updated (URL stable; e.g. sort/filter/SPA re-render) - call see to refresh refs"** instead of "no visible effect". Element-level changes still win when present (signature is the fallback, not an override). The signature ignores refs, so a re-snapshot of an unchanged page never false-positives.
+
+### `nth` from the end (the identical-buttons complaint)
+
+`act`/`find` disambiguation was 1-based from the top only. On N identical "Add to cart" buttons you had to know N to pick the last. v2.2 accepts negatives: `nth=-1` = last match, `-2` = second-last (wraps so `nth=-N` = first). The saucedemo "add the priciest after a price sort" case is now `act "Add to cart" nth=-1` with no counting.
+
+### CSS-selector escape hatch (closes charlotte's one real edge)
+
+The one place a pure a11y-tree tool loses to a CSS-selector tool: elements the a11y tree drops (custom `div[role=widget]`, presentational `span`s with handlers, shadow-exposed controls). v2.2 adds a `selector` param to `find`, `click`, `fill`, and `act`:
+- `find selector=".btn-x"` runs `querySelectorAll` and returns `[css]` lines with a `sel=` you pass back.
+- `click`/`fill`/`act selector="..."` acts directly on `querySelector(sel)`, reusing the existing real-mouse click + native-value-setter fill machinery (same React/Vue reliability as the ref path). `act selector` auto-detects tag/type (click buttons/links, fill text inputs, select `<select>`).
+
+This reaches off-tree widgets without adding a parallel action surface - the same verdict + delta path, just a different resolver.
+
+### Verification
+
+- `TestInferVerdictContentChangedReorder` / `TestInferVerdictNoChangeNoSignature` / `TestInferVerdictChangedBeatsContentChanged` / `TestSignatureStableAcrossRefReassign` (unit): the signature detects a pure reorder, ignores identical content, yields to element-level changes, and is ref-independent.
+- `TestResolveIntentNthNegative` (unit): nth=-1 last, -2 second-last, -N wraps to first, out-of-range errors.
+- `TestSelectorEscapeHatch` + `TestVerdictSortReorder` (live, hermetic data-URL pages): the off-tree span is unreachable by a11y find but reachable + clickable/fillable via selector; a real reorder verdict says "page updated" not "no visible effect".
+- Full live suite green (651s, 0 failures). `govulncheck` 0 reachable.
+
+### charlotte vs agent-browser (the live comparison, corrected)
+
+A live head-to-head (8 scenarios: HN orientation, saucedemo login, saucedemo multi-step purchase, Wikipedia search+extract, dense find, read content, dynamic/wait, agent-friendliness) confirmed the v2.1 findings and corrected two errors in the initial report:
+- **Corrected:** agent-browser DOES ship tab management (`tabs`) and screenshots (`screenshot`) - the initial report wrongly credited these to charlotte alone. charlotte's real exclusive edges shrink to: structural `diff`, session/cookie management, and drag-and-drop.
+- **Confirmed (re-verified cleanly):** charlotte's click on saucedemo's React "Add to cart" buttons returns success but has NO effect - a fresh navigation to `/cart.html` after the click shows an empty cart. This is a silent failure (the agent thinks it worked), worse than an error. agent-browser's real-mouse + synthetic `click()` fires the handler reliably.
+- **Now closed by v2.2:** charlotte's CSS-selector `find` edge (the selector escape hatch) and the agent-browser "no visible effect on sort" waffle (the content signature).
+
+The full corrected report ships at `charlotte-vs-agent-browser-report.md`.
+
 ## v2.1.1 - 2026-06-23 (ugly-ARIA whitelist hardening + the ugly-end benchmark)
 
 A reviewer pointed out the role whitelist is only as clean as the page's ARIA: on a messy SPA, decorative `div[role=button]` ads, `span[role=button]` with no handler, and other junk that used to live in dead markup moves UP into the semantic tree, where a static whitelist can't tell a meaningful control from a mislabeled one. This release adds a principled filter for the detectable junk, a benchmark that runs the snapshot against the ugly end, and the honest numbers.

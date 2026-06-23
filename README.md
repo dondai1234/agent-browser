@@ -59,6 +59,16 @@ Within Playwright MCP's ballpark on connect cost, lighter than Chrome DevTools M
 
 v1's by-ref tools (`click`/`fill`/`select`/`hover`/`press_key`) are all still there when you have a ref or need a non-default action. v2 is additive.
 
+## What's new in v2.2 (reliability + optimization, from the charlotte head-to-head)
+
+A live head-to-head vs [charlotte](https://github.com/TickTockBent/charlotte) (the closest direct competitor - same token-efficient, AX-tree-first thesis) surfaced three concrete improvements. v2.2 ships all three:
+
+- **Sharper verdict on URL-stable reorders.** A click that reorders the *same* DOM nodes (a product sort, a filter, an SPA re-render) used to read "no visible effect" because the backend-id set was unchanged. v2.2 adds an order-sensitive content signature to each tree; a reorder now reports **"page updated (URL stable; e.g. sort/filter/SPA re-render) - call see to refresh refs"**. Element-level changes still win when present.
+- **`nth` from the end.** `act`/`find` disambiguation now accepts negatives: `nth=-1` = last of N identical buttons, `-2` = second-last. The "add the priciest of N identical Add-to-cart buttons" case needs no counting.
+- **CSS-selector escape hatch.** `find`/`click`/`fill`/`act` now take `selector="<css>"` to reach elements the a11y tree drops (custom `div[role=widget]`, presentational spans with handlers) - the one place a pure a11y-tree tool loses to a CSS-selector tool. `find selector` returns `[css]` lines with a `sel=` you pass back; the action path reuses the real-mouse click + native-value-setter fill, so reliability matches the ref path.
+
+The live comparison (corrected): agent-browser wins on round-trips (33-50% fewer calls), response weight (5-80x smaller), verdicts, and click reliability. charlotte's click on saucedemo's React "Add to cart" returns success with **no effect** (verified: empty cart after a fresh `/cart.html` navigation) - a silent failure. charlotte's real exclusive edges: structural `diff`, session/cookie management, drag-and-drop. Full report: `charlotte-vs-agent-browser-report.md`. Full live suite green (651s, 0 failures); `govulncheck` 0 reachable.
+
 ## What's new in v2.1 (stable refs + the honest benchmark)
 
 - **Stable refs.** Refs used to be positional (`r1..rN` in tree order), reassigned on every snapshot, so a page re-render that shifted order silently retargeted an old ref to a *different* control - the agent clicks the wrong element and never knows. Now the same DOM node keeps the same ref across re-renders (a per-tab `backendNodeID -> ref` map with a monotonic counter), so a ref you hold stays valid after the page mutates. The map clears on navigation (fresh page = fresh refs) but the counter stays monotonic, so a stale ref from an earlier page can't collide with a current one - you get a clean `ref not found; call see` instead of a silent wrong-click. Proven live (`TestStableRefsAcrossReRender`, negative-verified).
