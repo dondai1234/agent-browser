@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/chromedp/cdproto/accessibility"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/go-json-experiment/json/jsontext"
 )
 
@@ -139,6 +140,54 @@ func TestAssignRefsStable(t *testing.T) {
 	}
 	if check3 == linkRef {
 		t.Errorf("removed link's ref %q was reused for a different node (checkbox) - stale ref would silently retarget", linkRef)
+	}
+}
+
+// TestBuildTreeDropsDecorativeUnfocused proves the decorative-junk filter: an
+// interactive role on an element that is NOT focusable AND has no accessible
+// name is dropped (a decorative div[role=button] / ad slot / span[role=button]
+// with no handler - the junk a role whitelist can't otherwise distinguish from a
+// real control). A native <button> (focusable) with no name stays; a named
+// custom widget stays even if unfocusable.
+func TestBuildTreeDropsDecorativeUnfocused(t *testing.T) {
+	mk := func(role, name string, backend cdp.BackendNodeID, focusable bool) *accessibility.Node {
+		n := &accessibility.Node{Role: axStr(role), Name: axStr(name), BackendDOMNodeID: backend}
+		if focusable {
+			n.Properties = append(n.Properties, &accessibility.Property{
+				Name: accessibility.PropertyNameFocusable,
+				Value: &accessibility.Value{Value: jsontext.Value(`true`)},
+			})
+		}
+		return n
+	}
+	tree := BuildTree([]*accessibility.Node{
+		mk("button", "", 1, false),           // decorative: unnamed + unfocusable -> DROP
+		mk("button", "Save", 2, false),       // named custom (unfocusable) -> KEEP
+		mk("button", "", 3, true),            // native icon button (focusable, unnamed) -> KEEP
+		mk("link", "", 4, false),             // decorative link -> DROP
+		mk("textbox", "", 5, true),           // unlabeled input (focusable) -> KEEP (act DOM fallback needs it)
+	})
+	refs := map[int64]bool{}
+	for _, e := range tree.Elems {
+		refs[e.Backend] = true
+	}
+	if refs[1] {
+		t.Error("unnamed + unfocusable button should be dropped (decorative)")
+	}
+	if refs[4] {
+		t.Error("unnamed + unfocusable link should be dropped (decorative)")
+	}
+	if !refs[2] {
+		t.Error("named custom widget (unfocusable) should be kept")
+	}
+	if !refs[3] {
+		t.Error("focusable unnamed button (real icon button) should be kept")
+	}
+	if !refs[5] {
+		t.Error("focusable unlabeled input should be kept (act DOM fallback targets it)")
+	}
+	if len(tree.Elems) != 3 {
+		t.Errorf("kept %d elements, want 3 (2 unnamed-unfocusable dropped)", len(tree.Elems))
 	}
 }
 

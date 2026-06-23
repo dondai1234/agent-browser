@@ -72,6 +72,10 @@ v1's by-ref tools (`click`/`fill`/`select`/`hover`/`press_key`) are all still th
 
 <sub>Tool-I/O tokens = (sent args JSON + returned text) / 4, summed over a deterministic scripted agent. Same fixtures, same end-state assertions. Each tool uses its own efficient path (agent-browser `act`+`read`; playwright-mcp `snapshot`+`type`+`click`). Run `go run ./bench/successtoken/ -compare` to reproduce.</sub>
 
+### v2.1.1: ugly-ARIA whitelist hardening
+
+A reviewer noted the role whitelist is only as clean as the page's ARIA: on a messy SPA, decorative `div[role=button]` ads and `span[role=button]` with no handler move UP into the semantic tree, where a static whitelist can't tell them from real controls. v2.1.1 drops interactive elements that are **unnamed AND not focusable** - a native `<button>`/`<a>`/`<input>` is always focusable, so real icon-only buttons and unlabeled inputs stay; a named custom widget stays even if unfocusable; only a nameless, unfocusable "button" (decorative div / ad slot) is dropped. Honest limit: named junk (10x "Click here") stays, because judging name quality is the agent's job. `bench/aria_mess` runs the snapshot against 11 ugly-ARIA pathologies and reports what the whitelist keeps; measured before->after, `decorative-role-button` 8->3 refs, `ad-slot-divs` 9->1, `messy-spa` 36->30, with real icon-only buttons + unlabeled inputs preserved. Full live suite green (no real control dropped on Saucedemo/HN/Wikipedia).
+
 ## Install
 
 Requires [Go](https://go.dev) 1.26+ and Chrome/Chromium (auto-discovered).

@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.1.1 - 2026-06-23 (ugly-ARIA whitelist hardening + the ugly-end benchmark)
+
+A reviewer pointed out the role whitelist is only as clean as the page's ARIA: on a messy SPA, decorative `div[role=button]` ads, `span[role=button]` with no handler, and other junk that used to live in dead markup moves UP into the semantic tree, where a static whitelist can't tell a meaningful control from a mislabeled one. This release adds a principled filter for the detectable junk, a benchmark that runs the snapshot against the ugly end, and the honest numbers.
+
+### Decorative-junk filter (the headline)
+
+- **Drop interactive elements that are unnamed AND not focusable.** A native `<button>`/`<a>`/`<input>` is always focusable, so real icon-only buttons and unlabeled inputs stay (the latter is what the `act` DOM fallback targets). A named custom widget stays even if unfocusable. Only an interactive role on an element with NO accessible name AND NO focus (a decorative `div[role=button]` / ad slot / `span[role=button]` with no handler) is dropped - the agent can't address it by intent (no name) and clicking it by ref would be a guess at a probably-decorative node.
+- **What it does NOT drop (honest limit):** named junk stays. A `span[role=button]` with `aria-label="x"`, or ten buttons all labeled "Click here", are kept - a name is a name, and judging name quality / disambiguating duplicates is the agent's job, not the whitelist's. The filter targets the detectable decorative layer, not mislabeled-but-named controls.
+- `PropertyNameFocusable` from the a11y tree is the signal.
+
+### `bench/aria_mess` - the ugly-end benchmark
+
+- Runs the snapshot against 11 synthetic pages that model the worst real ARIA pathologies (generic soup, decorative role=button, duplicate main, mislabeled controls, nameless icon buttons, link soup, landmark soup, ad-slot divs, a composite messy SPA) and reports per page: tokens, total refs, named refs, non-focusable refs, landmarks, duplicate main.
+- Reproducible (synthetic pathologies, local fixtures). See `bench/aria_mess/README.md`.
+
+### Measured (before -> after the filter)
+
+| page | refs before | refs after | tokens before | tokens after |
+|---|---|---|---|---|
+| decorative-role-button | 8 | 3 | 31 | 15 |
+| ad-slot-divs | 9 | 1 | 35 | 7 |
+| messy-spa (composite) | 36 | 30 | 186 | 165 |
+| generic-soup | 3 | 3 | 15 | 15 (already clean) |
+| nameless-icon-buttons (real) | 8 | 8 | 33 | 33 (native buttons, focusable, kept) |
+
+The filter removes the decorative junk the reviewer named; real icon-only buttons + unlabeled inputs + named custom widgets are preserved.
+
+### Verification
+
+- `TestBuildTreeDropsDecorativeUnfocused` (unit): drops unnamed+unfocusable, keeps named+unfocusable, keeps unnamed+focusable, keeps unlabeled inputs.
+- Full live suite green (636s, 0 failures) - the filter drops no real control on real sites (Saucedemo, HN, Wikipedia, go.dev). `govulncheck` 0 reachable.
+
 ## v2.1.0 - 2026-06-23 (stable refs + task-success-per-token benchmark)
 
 Refs were positional (r1..rN in tree order), reassigned on every snapshot. A page re-render that shifted tree order silently retargeted an old ref to a DIFFERENT control - the agent clicks the wrong element three steps ago and never knows. This release makes refs stable, adds a task-success-per-token benchmark (the honest metric, vs the snapshot-size table), and verifies both.

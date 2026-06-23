@@ -102,6 +102,19 @@ func BuildTree(nodes []*accessibility.Node) *Tree {
 
 		switch {
 		case interactiveRoles[role]:
+			// Drop decorative junk: an interactive role on an element that is NOT
+			// focusable AND has no accessible name is almost certainly a decorative
+			// div[role=button] / ad slot / span[role=button] with no handler - the
+			// junk a role whitelist can't otherwise tell from a real control (the
+			// "buttons that are really decorative divs with a tacked-on role"
+			// case). A native <button>/<a>/<input> is focusable, so real icon-only
+			// buttons + unlabeled inputs stay; a named custom widget stays even if
+			// unfocusable. Only unnamed + unfocusable is dropped: the agent can't
+			// address it by intent (no name), and clicking it by ref would be a
+			// guess at a probably-decorative node.
+			if name == "" && props[accessibility.PropertyNameFocusable] != "true" {
+				continue
+			}
 			t.addElement(role, name, val, backend, props)
 			t.Counts[role]++
 		case role == "heading":
