@@ -57,7 +57,7 @@ func (s *Session) NewTab(url string) (*snapshot.Tree, error) {
 	}
 	newCtx, cancel := chromedp.NewContext(parent.ctx)
 	s.counter++
-	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel}
+	t := &tab{id: fmt.Sprintf("t%d", s.counter), ctx: newCtx, cancel: cancel, refMap: map[int64]string{}}
 	s.tabs = append(s.tabs, t)
 	s.cur = len(s.tabs) - 1
 	if err := s.setupTabListenersLocked(t); err != nil {

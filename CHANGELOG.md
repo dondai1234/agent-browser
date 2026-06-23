@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.1.0 - 2026-06-23 (stable refs + task-success-per-token benchmark)
+
+Refs were positional (r1..rN in tree order), reassigned on every snapshot. A page re-render that shifted tree order silently retargeted an old ref to a DIFFERENT control - the agent clicks the wrong element three steps ago and never knows. This release makes refs stable, adds a task-success-per-token benchmark (the honest metric, vs the snapshot-size table), and verifies both.
+
+### Stable, backend-keyed refs (the headline reliability fix)
+
+- **Same DOM node keeps the same ref across re-renders.** Refs are now assigned from a per-tab `backendNodeID -> ref` map with a monotonic counter (`snapshot.Tree.AssignRefs`), instead of positional `r{index}`. A ref the agent holds from a previous snapshot still points to the right element after the page mutates - eliminating the positional-collision failure where `r5` silently retargets to a different control after a re-render shifts tree order.
+- **No stale-ref collision across navigation.** The ref map is cleared on navigation (a new document assigns fresh backend ids), but the counter stays monotonic, so a stale ref from an earlier page (a lower number) can't be reused for a different element on the new page. A confused agent holding an old ref gets a clean `ref not found; call see` instead of acting on the wrong control.
+- **`reset` is a clean slate.** Reset zeroes the counter (the tool tells the agent all refs are reset + returns a fresh orientation), so post-reset refs restart low. Normal navigation keeps the counter monotonic (the bulletproof path); reset is the explicit fresh-start escape hatch.
+- **Delta is sharper.** `Changed` elements keep their ref (same node, name/value differs), so a ref the agent holds for a changed control is still valid. `Added` get fresh refs; `Removed` carry the old ref (now invalid) so the breakage is explicit.
+- Proven live: `TestStableRefsAcrossReRender` (a re-render that prepends an element before existing ones - old refs stay stable, the new one gets a fresh ref, and reading the old ref still hits the original control, not the newly-prepended one) + unit `TestAssignRefsStable`. Negative-verified: disabling `AssignRefs` makes the live test fail with the exact silent-retarget symptom (`ref r3 text: Item 3 (new)` instead of `Item 1`).
+
+### Task-success-per-token benchmark (`bench/successtoken`)
+
+- A new harness runs 5 multi-step tasks (login, search+extract, form fill+select+submit, multi-page nav, lazy-list scroll) on local fixtures against agent-browser AND `@playwright/mcp` head-to-head, measuring task success + total tool-I/O tokens (sent args + returned text, /4). The "agent" is a deterministic scripted policy so the comparison is fair + reproducible (token cost is the tool surface, independent of the LLM).
+- Result (2026-06-23): both tools 5/5 (100%) success; **agent-browser 1142 tokens vs playwright-mcp 2337 tokens** (~2.05x fewer tokens at equal success). The win is intent-first `act` (resolve + act + verdict in one call, no per-action snapshot) + dense read/delta output vs the snapshot-type-snapshot pattern + verbose YAML snapshot. See `bench/successtoken/README.md`.
+
+### Verification
+
+- Full live suite green (zero failures); unit tests green; `govulncheck` 0 reachable; `go vet` + `go build ./...` clean (including the new bench package).
+- Benchmark reproducible (identical char counts across two runs - deterministic scripts).
+
 ## v2.0.9 - 2026-06-22 (flawless act + hardened click + agent QoL)
 
 A live-agent test (opencode) found `act` timing out on certain form layouts and `click` timing out enough to need `reset`. This release makes `act` flawless on poorly-labeled forms, hardens every action against wedging pages, fixes a latent `navigate back/forward/reload` hang, and adds agent QoL across the tool surface. 12 new live regression tests (gated by `AGENT_BROWSER_INTEGRATION=1`); full live suite green; `govulncheck` 0 reachable.

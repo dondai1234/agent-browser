@@ -61,6 +61,87 @@ func TestRenderSummaryCap(t *testing.T) {
 	}
 }
 
+// TestAssignRefsStable proves the core stability invariant: the same DOM node
+// (same Backend id) keeps the same ref across re-renders, a new node gets a new
+// ref, and a removed node's ref is never reused for a different node (monotonic
+// counter) - so an agent holding an old ref can't silently retarget a different
+// control after the page mutates. This is the fix for the positional-collision
+// failure mode where r5 retargets to a different element after a re-render.
+func TestAssignRefsStable(t *testing.T) {
+	refMap := map[int64]string{}
+	counter := 0
+
+	// First build: page has a button (backend 10) + a link (backend 11).
+	tree1 := BuildTree([]*accessibility.Node{
+		{Role: axStr("button"), Name: axStr("Submit"), BackendDOMNodeID: 10},
+		{Role: axStr("link"), Name: axStr("Learn more"), BackendDOMNodeID: 11},
+	})
+	tree1.AssignRefs(refMap, &counter)
+	buttonRef := tree1.Elems[0].Ref
+	linkRef := tree1.Elems[1].Ref
+	if buttonRef != "r1" || linkRef != "r2" {
+		t.Fatalf("first build: button=%q link=%q, want r1/r2", buttonRef, linkRef)
+	}
+
+	// Second build: page re-rendered. Same button + link (same backends) keep
+	// their refs even though... a heading was inserted BEFORE them in tree order
+	// (positional refs would have shifted: button r1->r2, link r2->r3). Stable
+	// refs must NOT shift.
+	tree2 := BuildTree([]*accessibility.Node{
+		{Role: axStr("heading"), Name: axStr("New section"), BackendDOMNodeID: 12},
+		{Role: axStr("button"), Name: axStr("Submit"), BackendDOMNodeID: 10},
+		{Role: axStr("link"), Name: axStr("Learn more"), BackendDOMNodeID: 11},
+	})
+	tree2.AssignRefs(refMap, &counter)
+	var btn2, link2, head2 string
+	for _, e := range tree2.Elems {
+		switch e.Backend {
+		case 10:
+			btn2 = e.Ref
+		case 11:
+			link2 = e.Ref
+		case 12:
+			head2 = e.Ref
+		}
+	}
+	if btn2 != buttonRef {
+		t.Errorf("button ref drifted: %q -> %q (must stay stable across re-render)", buttonRef, btn2)
+	}
+	if link2 != linkRef {
+		t.Errorf("link ref drifted: %q -> %q (must stay stable across re-render)", linkRef, link2)
+	}
+	if head2 == "" {
+		t.Error("new heading got no ref")
+	}
+	if head2 == buttonRef || head2 == linkRef {
+		t.Errorf("new heading reused an existing ref %q", head2)
+	}
+
+	// Third build: the link (backend 11) was removed and a NEW checkbox (backend
+	// 13) added. The button keeps its ref; the removed link's ref must NOT be
+	// reused for the checkbox (monotonic counter = no silent retargeting).
+	tree3 := BuildTree([]*accessibility.Node{
+		{Role: axStr("button"), Name: axStr("Submit"), BackendDOMNodeID: 10},
+		{Role: axStr("checkbox"), Name: axStr("Accept"), BackendDOMNodeID: 13},
+	})
+	tree3.AssignRefs(refMap, &counter)
+	var btn3, check3 string
+	for _, e := range tree3.Elems {
+		switch e.Backend {
+		case 10:
+			btn3 = e.Ref
+		case 13:
+			check3 = e.Ref
+		}
+	}
+	if btn3 != buttonRef {
+		t.Errorf("button ref drifted after removal: %q -> %q", buttonRef, btn3)
+	}
+	if check3 == linkRef {
+		t.Errorf("removed link's ref %q was reused for a different node (checkbox) - stale ref would silently retarget", linkRef)
+	}
+}
+
 func tail(s string, n int) string {
 	if len(s) <= n {
 		return s

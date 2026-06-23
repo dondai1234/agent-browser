@@ -36,6 +36,16 @@ type tab struct {
 	cancel context.CancelFunc
 	tree   *snapshot.Tree
 
+	// refMap is the per-tab backend->ref map that makes refs STABLE across
+	// re-renders: the same DOM node keeps the same ref, so an old ref can't
+	// silently retarget to a different control after the page mutates. Cleared
+	// on navigation (a new document assigns fresh backend ids); refCounter is
+	// monotonic and NOT reset on navigation, so a stale ref from an earlier page
+	// (a lower number) can't collide with a current one. Reset only on a full
+	// browser relaunch (reset), which is a clean slate the agent knows about.
+	refMap    map[int64]string
+	refCounter int
+
 	netMu     sync.Mutex
 	netEvents []netEvt // ring of recent XHR/Fetch responses, for the verdict's "did it hit the API" signal
 }
@@ -333,7 +343,7 @@ func (s *Session) launchBrowserLocked() error {
 	}
 	firstCtx, firstCancel := chromedp.NewContext(tabRootCtx)
 	s.counter = 1
-	s.tabs = []*tab{{id: "t1", ctx: firstCtx, cancel: firstCancel}}
+	s.tabs = []*tab{{id: "t1", ctx: firstCtx, cancel: firstCancel, refMap: map[int64]string{}}}
 	s.cur = 0
 	s.dialogListening = map[*tab]bool{}
 	return s.setupTabListenersLocked(s.tabs[0])
@@ -390,6 +400,30 @@ func (s *Session) curTabLocked() *tab {
 	return s.tabs[s.cur]
 }
 
+// invalidateTabLocked clears the cached tree + the stable-ref map for a tab
+// before a navigation (a new document assigns fresh backend ids, so the old
+// backend->ref bindings are stale). The ref counter is intentionally NOT reset:
+// keeping it monotonic means a stale ref from the pre-navigation page (a lower
+// number) can't be reused for a different element on the new page, so a confused
+// agent holding an old ref gets a clean "ref not found; call see" instead of
+// silently acting on the wrong control. Caller must hold s.mu.
+func (s *Session) invalidateTabLocked(t *tab) {
+	t.tree = nil
+	t.refMap = map[int64]string{}
+}
+
+// resetTabRefsLocked is the reset-path variant: it clears the tree + ref map AND
+// zeroes the ref counter, because reset is an explicit "fresh slate" the agent
+// asked for (the tool tells the agent all refs are reset + returns a fresh
+// orientation, so the agent re-sees and uses the new low refs). This is unlike a
+// normal navigation, which keeps the counter monotonic to prevent cross-page
+// ref collision. Caller must hold s.mu.
+func (s *Session) resetTabRefsLocked(t *tab) {
+	t.tree = nil
+	t.refMap = map[int64]string{}
+	t.refCounter = 0
+}
+
 // Navigate opens a URL on the current tab and waits for the body. Invalidates
 // the cached tree.
 func (s *Session) Navigate(raw string) error {
@@ -403,7 +437,7 @@ func (s *Session) Navigate(raw string) error {
 	if t == nil {
 		return errors.New("no tab")
 	}
-	t.tree = nil
+	s.invalidateTabLocked(t)
 	return s.run(t,
 		chromedp.Navigate(clean),
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -550,6 +584,7 @@ func (s *Session) pullAXLocked(t *tab) error {
 	// stays navigate-only (it's a CDP evaluate; kept off the hot action path).
 	tree.Challenge = detectChallengeTitleURL(loc, title)
 	tree.SetFrames(frameOf)
+	tree.AssignRefs(t.refMap, &t.refCounter)
 	t.tree = tree
 	return nil
 }
@@ -867,7 +902,7 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	if t == nil {
 		return nil, errors.New("no tab")
 	}
-	t.tree = nil
+	s.invalidateTabLocked(t)
 	// history.back/forward/reload tear down the execution context as the page
 	// navigates, so the Evaluate itself may error - ignore it. Then wait for the
 	// new page to be ready. NOTE: chromedp.WaitReady("body") can hang here on a
@@ -963,7 +998,7 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 		if t := s.curTabLocked(); t != nil {
 			var loc string
 			if err := s.runTimeout(t, 5*time.Second, chromedp.Location(&loc)); err == nil {
-				t.tree = nil
+				s.resetTabRefsLocked(t)
 				return s.finishResetLocked(url, "reset (re-navigate)")
 			}
 		}

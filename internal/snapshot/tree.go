@@ -122,10 +122,64 @@ func BuildTree(nodes []*accessibility.Node) *Tree {
 }
 
 func (t *Tree) addElement(role, name, val string, backend int64, props map[accessibility.PropertyName]string) Element {
+	// Positional default ref. The browser layer overrides these with STABLE,
+	// backend-keyed refs via AssignRefs so a ref the agent holds stays valid
+	// across a re-render (same DOM node -> same ref). The positional default
+	// keeps BuildTree usable standalone (tests, pure transforms).
 	ref := fmt.Sprintf("r%d", len(t.Elems)+1)
 	el := Element{Ref: ref, Role: role, Name: name, Value: val, Backend: backend, Props: props}
 	t.Elems = append(t.Elems, el)
 	return el
+}
+
+// AssignRefs re-assigns stable, backend-keyed refs to the tree's interactive
+// elements and headings. The same DOM node (same Backend id) keeps the same ref
+// across re-renders, so a ref the agent holds from a previous snapshot still
+// points to the right element after the page mutates - eliminating the
+// positional-collision failure where r5 silently retargets to a different
+// control after a re-render shifts tree order. refMap is the per-tab
+// backend->ref map, persisted across builds; counter is the monotonic ref
+// allocator (never reset within a page, so a stale ref from an earlier page
+// can't retarget a current node). Elements with no backing DOM node (Backend==0,
+// rare virtual a11y nodes) get an ephemeral ref that isn't stored (can't be
+// stabilized). Call once after BuildTree + SetFrames; idempotent across
+// re-builds of the same page.
+func (t *Tree) AssignRefs(refMap map[int64]string, counter *int) {
+	for i := range t.Elems {
+		be := t.Elems[i].Backend
+		if be == 0 {
+			*counter++
+			t.Elems[i].Ref = fmt.Sprintf("r%d", *counter)
+			continue
+		}
+		if ref, ok := refMap[be]; ok {
+			t.Elems[i].Ref = ref
+			continue
+		}
+		*counter++
+		ref := fmt.Sprintf("r%d", *counter)
+		refMap[be] = ref
+		t.Elems[i].Ref = ref
+	}
+	// Headings are the same nodes as their Elems entry (addElement appended to
+	// both); sync their refs from the refMap (or by matching the Elems entry for
+	// the rare Backend==0 case) so the two slices agree - minimal/summary render
+	// from Headings, find/ByRef from Elems.
+	for i := range t.Headings {
+		be := t.Headings[i].Backend
+		if be != 0 {
+			if ref, ok := refMap[be]; ok {
+				t.Headings[i].Ref = ref
+				continue
+			}
+		}
+		for j := range t.Elems {
+			if t.Elems[j].Role == "heading" && t.Elems[j].Backend == be && t.Elems[j].Name == t.Headings[i].Name {
+				t.Headings[i].Ref = t.Elems[j].Ref
+				break
+			}
+		}
+	}
 }
 
 // SetFrames attaches the owning iframe title to elements whose backend node

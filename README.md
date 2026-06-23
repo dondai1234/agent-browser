@@ -59,6 +59,19 @@ Within Playwright MCP's ballpark on connect cost, lighter than Chrome DevTools M
 
 v1's by-ref tools (`click`/`fill`/`select`/`hover`/`press_key`) are all still there when you have a ref or need a non-default action. v2 is additive.
 
+## What's new in v2.1 (stable refs + the honest benchmark)
+
+- **Stable refs.** Refs used to be positional (`r1..rN` in tree order), reassigned on every snapshot, so a page re-render that shifted order silently retargeted an old ref to a *different* control - the agent clicks the wrong element and never knows. Now the same DOM node keeps the same ref across re-renders (a per-tab `backendNodeID -> ref` map with a monotonic counter), so a ref you hold stays valid after the page mutates. The map clears on navigation (fresh page = fresh refs) but the counter stays monotonic, so a stale ref from an earlier page can't collide with a current one - you get a clean `ref not found; call see` instead of a silent wrong-click. Proven live (`TestStableRefsAcrossReRender`, negative-verified).
+- **Task-success-per-token benchmark.** Snapshot size is the easy number; success per token is the honest one. `bench/successtoken` runs 5 multi-step tasks (login, search+extract, form fill+select+submit, multi-page nav, lazy-list scroll) head-to-head against `@playwright/mcp` on local fixtures, with a deterministic scripted agent so the comparison is fair + reproducible. Result (2026-06-23): both 5/5 (100%) success, **agent-browser 1142 tokens vs playwright-mcp 2337 tokens** (~2x fewer at equal success). See `bench/successtoken/README.md`.
+
+|  | **agent-browser v2.1** | Playwright MCP |
+|---|:--:|:--:|
+| Task success (5 multi-step tasks) | **5/5 (100%)** | 5/5 (100%) |
+| Total tool-I/O tokens for all 5 tasks | **~1,142 tok** | ~2,337 tok |
+| Tokens per success | **~228 tok** | ~467 tok |
+
+<sub>Tool-I/O tokens = (sent args JSON + returned text) / 4, summed over a deterministic scripted agent. Same fixtures, same end-state assertions. Each tool uses its own efficient path (agent-browser `act`+`read`; playwright-mcp `snapshot`+`type`+`click`). Run `go run ./bench/successtoken/ -compare` to reproduce.</sub>
+
 ## Install
 
 Requires [Go](https://go.dev) 1.26+ and Chrome/Chromium (auto-discovered).

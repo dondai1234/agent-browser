@@ -41,7 +41,7 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 	if t == nil {
 		return nil, errors.New("no tab")
 	}
-	t.tree = nil
+	s.invalidateTabLocked(t)
 	if err := s.run(t,
 		chromedp.Navigate(clean),
 		chromedp.WaitReady("body", chromedp.ByQuery),
