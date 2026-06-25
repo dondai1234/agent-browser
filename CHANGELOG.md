@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.2 - 2026-06-25 (idle auto-close - Chrome tears down when not in use)
+
+v2.2.1 stopped Chrome spawning on startup, but once you navigated once, Chrome stayed alive for the whole MCP session - so a one-shot browser use left Chrome running for the rest of the chat. v2.2.2 adds an **idle auto-close**: a background reaper tears Chrome down after `--idle-timeout` (default **10m**) of no browser activity. The next navigate re-launches it seamlessly via the lazy-launch path (page state is lost - a fresh tab - so the agent re-navigates; read-only ops before that report "no page snapshot yet; call navigate first"). `--idle-timeout 0` disables it. The reaper polls at idleTimeout/4 (clamped 5-60s), only acts when the browser is actually up + genuinely idle, and never races an in-flight op (it takes the session lock, so it can only tear down between ops). Browser-touching ops reset the idle timer via `touchLocked` (in `curTabLocked` + `ensureBrowserLocked`); pure context ops (`history` with no browser use) don't keep Chrome alive.
+
+### Verification
+
+- `TestIdleAutoClose` (live, 6s test timeout): Chrome launches on navigate, **auto-closes after ~6s idle** (0 debug-chrome processes), `where` reports "no page snapshot yet", the next navigate **re-launches** Chrome + the page is reachable.
+- Full live suite green (743s, 0 failures) - the `touchLocked` in the hot path + the background reaper regress nothing (the 10m default never fires during the suite's frequent ops). `govulncheck` 0 reachable.
+
 ## v2.2.1 - 2026-06-25 (lazy browser launch - no Chrome on startup)
 
 The MCP server used to launch Chrome the moment it started (`browser.New` ran `launchBrowserLocked` eagerly), so a Chrome process spawned as soon as your agent client connected - even before any tool was called. If you connected the server but never drove it, Chrome sat idle eating resources. v2.2.1 makes the launch **lazy**: `New()` only constructs the session; Chrome spawns on the first **page-opening** op (navigate / new tab / back-forward-reload) via a new `ensureBrowserLocked`. Read-only ops called before the first navigate (`where`, `find`, `see`, `read`, ...) report "no page snapshot yet; call navigate first" and do NOT spawn Chrome. The persistent->temp profile fallback + the dead-session guard carry over unchanged. `Close()` is a no-op if the browser was never launched (no orphan process).

@@ -71,6 +71,10 @@ A live head-to-head vs [charlotte](https://github.com/TickTockBent/charlotte) (t
 
 The MCP server used to launch Chrome the moment it started - a Chrome process spawned as soon as your agent client connected, before any tool was called. v2.2.1 makes the launch **lazy**: Chrome spawns on the first **navigate** (or new tab / back-forward-reload), not on server boot. Read-only ops before the first navigate report "no page snapshot yet; call navigate first" and do NOT spawn Chrome. So connecting the server costs zero browser processes until you actually drive it. `Close()` is a no-op if the browser was never launched (no orphan Chrome).
 
+### v2.2.2: idle auto-close (Chrome tears down when not in use)
+
+v2.2.1 stopped Chrome spawning on startup, but once you navigated once, Chrome stayed alive for the whole session. v2.2.2 adds an **idle auto-close**: after `--idle-timeout` (default **10m**) of no browser activity, Chrome is torn down - so a one-shot use doesn't leave it running for the rest of the chat. The next navigate re-launches it seamlessly (page state is lost - re-navigate). `--idle-timeout 0` disables it. Combined with the lazy launch: **zero Chrome processes while idle, spawn on use, tear down when you stop.**
+
 The live comparison (corrected): agent-browser wins on round-trips (33-50% fewer calls), response weight (5-80x smaller), verdicts, and click reliability. charlotte's click on saucedemo's React "Add to cart" returns success with **no effect** (verified: empty cart after a fresh `/cart.html` navigation) - a silent failure. charlotte's real exclusive edges: structural `diff`, session/cookie management, drag-and-drop. Full report: `charlotte-vs-agent-browser-report.md`. Full live suite green (858s, 0 failures); `govulncheck` 0 reachable.
 
 ## What's new in v2.1 (stable refs + the honest benchmark)
@@ -173,7 +177,7 @@ Every tool's description is hand-crafted to tell the agent exactly what to pass,
 
 ## Flags
 
-`--headless` · `--user-data-dir` (override the profile location) · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/agent-browser`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-eval` (eval is on by default) · `--op-timeout` (per-CDP-op timeout, default 30s) · `--allow-insecure-schemes` · `--version`
+`--headless` · `--user-data-dir` (override the profile location) · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/agent-browser`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-eval` (eval is on by default) · `--op-timeout` (per-CDP-op timeout, default 30s) · `--idle-timeout` (auto-close Chrome after this long idle, default 10m; 0 disables) · `--allow-insecure-schemes` · `--version`
 
 ## Status
 

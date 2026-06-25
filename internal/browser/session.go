@@ -113,6 +113,15 @@ type Session struct {
 
 	// per-tab listener state.
 	dialogListening map[*tab]bool
+
+	// idle auto-close: lastActivity is updated on every browser-touching op;
+	// idleReaper tears the browser down after cfg.IdleTimeout of inactivity so a
+	// one-shot use doesn't leave Chrome running for the whole MCP session. The
+	// next page-opening op re-launches via ensureBrowserLocked (page state is
+	// lost - a fresh tab - so the agent re-navigates). 0 = disabled.
+	lastActivity time.Time
+	idleTimeout  time.Duration
+	reaperStop   chan struct{}
 }
 
 // opTimeoutDefault bounds a single CDP operation (chromedp.Run). A hung page
@@ -245,6 +254,7 @@ type Config struct {
 	ViewportH   int           // window height; 0 = 768
 	Stealth     bool          // apply anti-detection flags + init script + jittered mouse (default true)
 	OpTimeout   time.Duration // per-CDP-operation timeout (default 30s); bounds any single chromedp.Run so a hung page can't wedge the session mutex + deadlock every tool. Raise for very slow pages.
+	IdleTimeout time.Duration // auto-close Chrome after this long with no browser activity (default 10m); 0 disables. The next navigate re-launches (page state is lost - re-navigate).
 }
 
 // New launches Chrome and returns a Session with one initial tab. If Chrome
@@ -261,11 +271,56 @@ type Config struct {
 // against the cached tab and naturally report "no snapshot; call navigate
 // first" if called before the first navigation, without spawning Chrome.
 func New(cfg Config) (*Session, error) {
-	s := &Session{cfg: cfg, stealth: cfg.Stealth, opTimeout: cfg.OpTimeout, dialogListening: map[*tab]bool{}}
+	s := &Session{cfg: cfg, stealth: cfg.Stealth, opTimeout: cfg.OpTimeout, dialogListening: map[*tab]bool{}, lastActivity: time.Now(), idleTimeout: cfg.IdleTimeout}
 	if s.opTimeout <= 0 {
 		s.opTimeout = opTimeoutDefault
 	}
+	if s.idleTimeout > 0 {
+		s.reaperStop = make(chan struct{})
+		go s.idleReaperLoop(s.idleTimeout)
+	}
 	return s, nil
+}
+
+// touchLocked records browser activity for the idle auto-close reaper. Called
+// from curTabLocked + ensureBrowserLocked, so every browser-touching op resets
+// the idle timer. Caller must hold s.mu.
+func (s *Session) touchLocked() { s.lastActivity = time.Now() }
+
+// idleReaperLoop tears the browser down after idleTimeout of no browser
+// activity, so a one-shot browser use doesn't leave Chrome running for the
+// whole MCP session. It does NOT set s.dead (the close is intentional, not a
+// crash), so the next page-opening op re-launches seamlessly via
+// ensureBrowserLocked. Page state is lost (a fresh tab on re-launch); the agent
+// re-navigates. Polls at idleTimeout/4 (clamped 5-60s) so teardown is prompt.
+func (s *Session) idleReaperLoop(d time.Duration) {
+	interval := d / 4
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	if interval > 60*time.Second {
+		interval = 60 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.reaperStop:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			if len(s.tabs) == 0 || s.dead != nil {
+				s.mu.Unlock()
+				continue
+			}
+			if time.Since(s.lastActivity) >= d {
+				s.teardownBrowserLocked()
+				s.mu.Unlock()
+			} else {
+				s.mu.Unlock()
+			}
+		}
+	}
 }
 
 // ensureBrowserLocked launches Chrome if it has not been launched yet. Called
@@ -275,6 +330,7 @@ func New(cfg Config) (*Session, error) {
 // retrying the launch on every call. Carries the persistent->temp profile
 // fallback that New used to run eagerly. Caller must hold s.mu.
 func (s *Session) ensureBrowserLocked() error {
+	s.touchLocked()
 	if len(s.tabs) > 0 {
 		return nil
 	}
@@ -397,6 +453,9 @@ func (s *Session) PersistFallback() bool { return s.persistFallback }
 
 // Close shuts down the browser.
 func (s *Session) Close() {
+	if s.reaperStop != nil {
+		close(s.reaperStop)
+	}
 	s.mu.Lock()
 	for _, t := range s.tabs {
 		if t.cancel != nil {
@@ -414,6 +473,7 @@ func (s *Session) Close() {
 
 // curTabLocked returns the current tab. Caller must hold s.mu.
 func (s *Session) curTabLocked() *tab {
+	s.touchLocked()
 	if len(s.tabs) == 0 {
 		return nil
 	}

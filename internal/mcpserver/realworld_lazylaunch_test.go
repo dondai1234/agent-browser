@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -89,3 +90,53 @@ func TestLazyBrowserLaunch(t *testing.T) {
 
 var _ context.Context
 var _ = mcp.CallToolResult{}
+
+// TestIdleAutoClose: after a short idle timeout with no browser activity, Chrome
+// is torn down (no orphan process for the rest of the session); the next
+// navigate re-launches it seamlessly. Proves a one-shot browser use doesn't
+// leave Chrome running for the whole chat. Uses a 6s test timeout (the real
+// default is 10m) so the test runs fast.
+func TestIdleAutoClose(t *testing.T) {
+	sess, ctx, cleanup := realWorldSetupWithFlags(t, "--no-persist", "--idle-timeout=6s")
+	defer cleanup()
+
+	// Launch + confirm Chrome is up.
+	callTool(t, sess, ctx, "navigate", map[string]any{"url": "https://example.com"})
+	if n := countDebugChrome(t); n >= 0 && n < 1 {
+		t.Fatalf("navigate should launch Chrome, got %d", n)
+	}
+	t.Logf("OK: Chrome up after navigate (%d debug-chrome processes)", countDebugChrome(t))
+
+	// Idle wait: NO session tool calls (those would reset the idle timer). Only
+	// sleep + OS-level process checks. After ~6s idle the reaper tears Chrome down.
+	deadline := time.Now().Add(20 * time.Second)
+	gone := false
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		if n := countDebugChrome(t); n == 0 {
+			gone = true
+			break
+		}
+	}
+	if !gone {
+		t.Fatalf("Chrome did not auto-close after idle timeout (still %d debug-chrome processes)", countDebugChrome(t))
+	}
+	t.Logf("OK: Chrome auto-closed after idle")
+
+	// where now reports no page (browser was torn down) - without launching.
+	where := callTool(t, sess, ctx, "where", map[string]any{})
+	if !strings.Contains(where, "no page snapshot yet") {
+		t.Fatalf("where after idle-close should say 'no page snapshot yet', got: %s", where)
+	}
+
+	// The next navigate re-launches Chrome (page state was lost - fresh nav).
+	callTool(t, sess, ctx, "navigate", map[string]any{"url": "https://example.com"})
+	if n := countDebugChrome(t); n >= 0 && n < 1 {
+		t.Fatalf("navigate after idle-close should re-launch Chrome, got %d", n)
+	}
+	out := callTool(t, sess, ctx, "where", map[string]any{})
+	if !strings.Contains(out, "example.com") {
+		t.Fatalf("where after re-launch should show example.com, got: %s", out)
+	}
+	t.Logf("OK: Chrome re-launched by next navigate, page reachable")
+}
