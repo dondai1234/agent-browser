@@ -45,6 +45,9 @@ func (s *Session) NewTab(url string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureBrowserLocked(); err != nil {
+		return nil, err
+	}
 	// Derive the new tab from an existing tab's ctx (which carries the allocated
 	// Browser), NOT from s.browserCtx: browserCtx's Browser stays nil because the
 	// launch runs on the first tab, so NewContext(browserCtx) would think IT is

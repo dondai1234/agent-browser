@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.1 - 2026-06-25 (lazy browser launch - no Chrome on startup)
+
+The MCP server used to launch Chrome the moment it started (`browser.New` ran `launchBrowserLocked` eagerly), so a Chrome process spawned as soon as your agent client connected - even before any tool was called. If you connected the server but never drove it, Chrome sat idle eating resources. v2.2.1 makes the launch **lazy**: `New()` only constructs the session; Chrome spawns on the first **page-opening** op (navigate / new tab / back-forward-reload) via a new `ensureBrowserLocked`. Read-only ops called before the first navigate (`where`, `find`, `see`, `read`, ...) report "no page snapshot yet; call navigate first" and do NOT spawn Chrome. The persistent->temp profile fallback + the dead-session guard carry over unchanged. `Close()` is a no-op if the browser was never launched (no orphan process).
+
+### Verification
+
+- `TestLazyBrowserLaunch` (live): right after server connect, **0** debug-Chrome processes (no eager launch); `where`/`find` before navigate return "no page snapshot yet" without launching; the first navigate launches Chrome + the page is reachable.
+- Full live suite green (858s, 0 failures) - no regression: every op that needs a page still gets it (navigate/new-tab/back-forward-reload call `ensureBrowserLocked`; actions run against the cached tab and naturally error "no snapshot" if called before navigate). `govulncheck` 0 reachable.
+
 ## v2.2.0 - 2026-06-23 (reliability + optimization: sharper verdicts, nth-from-end, CSS-selector escape hatch)
 
 A live head-to-head vs charlotte (the closest direct competitor - same token-efficient, AX-tree-first thesis) surfaced three concrete improvements. This release ships all three, verified against a clean re-run of the charlotte comparison.

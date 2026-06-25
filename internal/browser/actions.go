@@ -37,6 +37,9 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureBrowserLocked(); err != nil {
+		return nil, err
+	}
 	t := s.curTabLocked()
 	if t == nil {
 		return nil, errors.New("no tab")

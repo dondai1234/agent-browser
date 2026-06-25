@@ -253,32 +253,55 @@ type Config struct {
 // throwaway temp profile so the server still works (no persistence, but alive).
 // Without this fallback, a locked profile makes every tool fail with "chrome
 // failed to start" and the server is useless until the orphan is killed.
+// New creates a browser session but does NOT launch Chrome yet. The browser
+// launches lazily on the first operation that opens a page (navigate / new
+// tab / back-forward-reload), via ensureBrowserLocked. So an MCP server can sit
+// idle with no Chrome process until the agent actually drives it - the fix for
+// the eager-launch-on-startup behavior. Other ops (see/find/read/act ...) run
+// against the cached tab and naturally report "no snapshot; call navigate
+// first" if called before the first navigation, without spawning Chrome.
 func New(cfg Config) (*Session, error) {
 	s := &Session{cfg: cfg, stealth: cfg.Stealth, opTimeout: cfg.OpTimeout, dialogListening: map[*tab]bool{}}
 	if s.opTimeout <= 0 {
 		s.opTimeout = opTimeoutDefault
 	}
+	return s, nil
+}
+
+// ensureBrowserLocked launches Chrome if it has not been launched yet. Called
+// at the top of the page-opening ops (NavigateAndSee, NavigateAction, NewTab).
+// If the browser already launched it is a no-op; if it died (s.dead) it returns
+// the dead error so the caller surfaces "call reset" instead of silently
+// retrying the launch on every call. Carries the persistent->temp profile
+// fallback that New used to run eagerly. Caller must hold s.mu.
+func (s *Session) ensureBrowserLocked() error {
+	if len(s.tabs) > 0 {
+		return nil
+	}
+	if s.dead != nil {
+		return s.dead
+	}
 	if err := s.launchBrowserLocked(); err != nil {
-		if cfg.UserDataDir != "" {
-			// The requested (persistent) profile wouldn't start Chrome - locked by
-			// an orphaned Chrome from a prior run, corrupted, or otherwise unusable
-			// (any launch error: "chrome failed to start", "websocket url timeout
-			// reached", ...). Fall back to a throwaway temp profile so the server
-			// still works (no persistence, but alive). Without this, a locked profile
-			// makes every tool fail + the chromedp double-close panic crashes the
-			// server once a later op retries Allocate.
+		if s.cfg.UserDataDir != "" {
+			// The requested (persistent) profile wouldn't start Chrome - locked by an
+		// orphaned Chrome from a prior run, corrupted, or otherwise unusable. Fall
+		// back to a throwaway temp profile so the op still works (no persistence,
+		// but alive). Without this, a locked profile makes every tool fail + the
+		// chromedp double-close panic crashes the server once a later op retries.
 			s.teardownBrowserLocked()
 			s.cfg.UserDataDir = ""
 			s.dead = nil
 			if err2 := s.launchBrowserLocked(); err2 != nil {
-				return nil, fmt.Errorf("chrome failed to start (persistent profile: %v; temp profile fallback also failed: %w)", err, err2)
+				s.dead = err2
+				return fmt.Errorf("chrome failed to start (persistent profile: %v; temp profile fallback also failed: %w)", err, err2)
 			}
 			s.persistFallback = true
-		} else {
-			return nil, fmt.Errorf("launch browser: %w", err)
+			return nil
 		}
+		s.dead = err
+		return fmt.Errorf("launch browser: %w", err)
 	}
-	return s, nil
+	return nil
 }
 
 // launchBrowserLocked builds the Chrome allocator + browser session + first tab
@@ -898,6 +921,9 @@ func (s *Session) NavigateAction(action string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureBrowserLocked(); err != nil {
+		return nil, err
+	}
 	t := s.curTabLocked()
 	if t == nil {
 		return nil, errors.New("no tab")

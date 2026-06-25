@@ -67,7 +67,11 @@ A live head-to-head vs [charlotte](https://github.com/TickTockBent/charlotte) (t
 - **`nth` from the end.** `act`/`find` disambiguation now accepts negatives: `nth=-1` = last of N identical buttons, `-2` = second-last. The "add the priciest of N identical Add-to-cart buttons" case needs no counting.
 - **CSS-selector escape hatch.** `find`/`click`/`fill`/`act` now take `selector="<css>"` to reach elements the a11y tree drops (custom `div[role=widget]`, presentational spans with handlers) - the one place a pure a11y-tree tool loses to a CSS-selector tool. `find selector` returns `[css]` lines with a `sel=` you pass back; the action path reuses the real-mouse click + native-value-setter fill, so reliability matches the ref path.
 
-The live comparison (corrected): agent-browser wins on round-trips (33-50% fewer calls), response weight (5-80x smaller), verdicts, and click reliability. charlotte's click on saucedemo's React "Add to cart" returns success with **no effect** (verified: empty cart after a fresh `/cart.html` navigation) - a silent failure. charlotte's real exclusive edges: structural `diff`, session/cookie management, drag-and-drop. Full report: `charlotte-vs-agent-browser-report.md`. Full live suite green (651s, 0 failures); `govulncheck` 0 reachable.
+### v2.2.1: lazy browser launch (no Chrome on startup)
+
+The MCP server used to launch Chrome the moment it started - a Chrome process spawned as soon as your agent client connected, before any tool was called. v2.2.1 makes the launch **lazy**: Chrome spawns on the first **navigate** (or new tab / back-forward-reload), not on server boot. Read-only ops before the first navigate report "no page snapshot yet; call navigate first" and do NOT spawn Chrome. So connecting the server costs zero browser processes until you actually drive it. `Close()` is a no-op if the browser was never launched (no orphan Chrome).
+
+The live comparison (corrected): agent-browser wins on round-trips (33-50% fewer calls), response weight (5-80x smaller), verdicts, and click reliability. charlotte's click on saucedemo's React "Add to cart" returns success with **no effect** (verified: empty cart after a fresh `/cart.html` navigation) - a silent failure. charlotte's real exclusive edges: structural `diff`, session/cookie management, drag-and-drop. Full report: `charlotte-vs-agent-browser-report.md`. Full live suite green (858s, 0 failures); `govulncheck` 0 reachable.
 
 ## What's new in v2.1 (stable refs + the honest benchmark)
 
