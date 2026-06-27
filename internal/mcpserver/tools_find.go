@@ -32,9 +32,9 @@ func registerFind(srv *mcp.Server, sess *browser.Session) {
 			}
 			return textResult(browser.RenderSelectorMatches(matches)), nil, nil
 		}
-		tree := sess.Tree()
-		if tree == nil {
-			return errResult(browser.ErrNoSnapshot), nil, nil
+		tree, err := sess.EnsureTree()
+		if err != nil {
+			return errResult(err), nil, nil
 		}
 		var els []snapshot.Element
 		if a.Exact {

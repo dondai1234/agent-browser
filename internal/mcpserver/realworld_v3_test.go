@@ -391,3 +391,41 @@ func TestV3ActNeedsTarget(t *testing.T) {
 		t.Errorf("act-no-target error should mention target, got: %q", contentText(res))
 	}
 }
+
+// TestV3WikipediaSearchNoRetry reproduces the opencode report's task: nav
+// Wikipedia, get refs (the report's "see refs returned empty, needed retry"),
+// fill the search box BY INTENT (no CSS-selector fallback), submit with Enter.
+// v3.1 fixes: (1) the empty-refs race (readyState-complete wait + empty-tree
+// heal + see/find self-heal), (2) intent targeting landing on the "Search"
+// button instead of the search input (value restricts to fillable).
+func TestV3WikipediaSearchNoRetry(t *testing.T) {
+	sess, ctx, cleanup := realWorldSetup(t)
+	defer cleanup()
+	callTool(t, sess, ctx, "nav", map[string]any{"url": "https://en.wikipedia.org"})
+
+	// see refs must be populated on the FIRST call (no retry needed).
+	refs := callTool(t, sess, ctx, "see", map[string]any{"level": "refs"})
+	refLines := strings.Count(refs, "[r")
+	t.Logf("wikipedia refs: %d ref-lines", refLines)
+	if refLines < 5 {
+		t.Fatalf("see refs returned a thin/empty tree on Wikipedia (the empty-refs race); got %d ref-lines:\n%s", refLines, refs)
+	}
+
+	// intent targeting fills the search input by name (NOT a CSS selector).
+	fillOut := callTool(t, sess, ctx, "act", map[string]any{"intent": "Search", "value": "Machine learning"})
+	t.Logf("act Search fill:\n%s", fillOut)
+	if strings.Contains(fillOut, "ambiguous") {
+		t.Errorf("act \"Search\" value= should resolve the search input unambiguously, got: %s", fillOut)
+	}
+	if strings.Contains(fillOut, "error") || strings.Contains(fillOut, "IsError") {
+		t.Errorf("act \"Search\" value= should not error, got: %s", fillOut)
+	}
+
+	// submit with Enter; wait for navigation to the article/search-results.
+	callTool(t, sess, ctx, "act", map[string]any{"key": "Enter", "waitUrl": "Machine", "waitMs": 15000})
+	url := callTool(t, sess, ctx, "js", map[string]any{"script": "location.href"})
+	t.Logf("after Enter, url: %s", url)
+	if !strings.Contains(strings.ToLower(url), "machine") {
+		t.Errorf("search did not navigate to a Machine-learning page/result, url: %s", url)
+	}
+}

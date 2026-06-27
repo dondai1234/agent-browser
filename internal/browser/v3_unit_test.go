@@ -44,3 +44,37 @@ func TestParseErrObjectArray(t *testing.T) {
 		t.Fatalf("array result must not be treated as an error")
 	}
 }
+
+// TestResolveIntentValueExcludesClickable pins the v3.1 targeting fix: when a
+// value is supplied, intent resolution restricts to fillable/combobox, so an
+// exact-named clickable (Wikipedia's "Search" button) can't outrank the search
+// input and force a selector fallback.
+func TestResolveIntentValueExcludesClickable(t *testing.T) {
+	tr := treeWith(
+		el("r1", "button", "Search", 1),              // exact name, but clickable
+		el("r2", "searchbox", "Search Wikipedia", 2), // substring, fillable
+	)
+	got, _, err := resolveIntent(tr, "Search", "Machine learning", "", 0)
+	if err != nil {
+		t.Fatalf("value-bearing \"Search\" should resolve the fillable, got err=%v", err)
+	}
+	if got.Ref != "r2" {
+		t.Errorf("want the fillable r2 (searchbox), got ref=%q role=%q", got.Ref, got.Role)
+	}
+}
+
+// TestResolveIntentNoValuePrefersClickableButton: without a value, the same
+// tree resolves the clickable (click the Search button), not the input.
+func TestResolveIntentNoValuePrefersClickableButton(t *testing.T) {
+	tr := treeWith(
+		el("r1", "button", "Search", 1),
+		el("r2", "searchbox", "Search Wikipedia", 2),
+	)
+	got, _, err := resolveIntent(tr, "Search", "", "", 0)
+	if err != nil {
+		t.Fatalf("no-value \"Search\" should resolve, got err=%v", err)
+	}
+	if got.Ref != "r1" {
+		t.Errorf("no-value \"Search\" should resolve the clickable button r1, got ref=%q", got.Ref)
+	}
+}

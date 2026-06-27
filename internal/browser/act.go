@@ -128,6 +128,14 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 		if role != "" && el.Role != role {
 			continue
 		}
+		// value= is ONLY for fillable/combobox (the act contract). So when a value
+		// is supplied, restrict a11y candidates to fillable/combobox - otherwise a
+		// clickable with an exact name (Wikipedia's "Search" button) outranks the
+		// search input and act clicks the button instead of filling the input.
+		// nth is an explicit pick, so don't restrict when the agent pinned it.
+		if hasValue && nth == 0 && !isFillableRole(el.Role) && el.Role != "combobox" {
+			continue
+		}
 		name := strings.ToLower(el.Name)
 		if name == "" || !strings.Contains(name, needle) {
 			continue
@@ -326,7 +334,7 @@ func (s *Session) recordActionErrorLocked(before *snapshot.Tree, action string, 
 // (or button/link text) contains the intent, each with a unique CSS selector so
 // actOnDOMLocked can re-find + act on the chosen one without a ref.
 const intentDOMJS = `(function(){
-  var needle = __needle, wantRole = __role;
+  var needle = __needle, wantRole = __role, hasValue = __hasValue;
   function uniqueSel(el){
     if (el && el.id) { try { return '#'+CSS.escape(el.id); } catch(e){} }
     var parts=[];
@@ -340,6 +348,8 @@ const intentDOMJS = `(function(){
     }
     return parts.join(' > ');
   }
+  function isFillableTag(tag,type){ if(tag==='textarea'||tag==='select')return true; if(tag==='input'){ var t=(type||'text').toLowerCase(); return t==='text'||t==='email'||t==='tel'||t==='url'||t==='search'||t==='password'||t==='number'; } return false; }
+  function isClickableTag(tag,type){ if(tag==='button'||tag==='a')return true; if(tag==='input'){ var t=(type||'').toLowerCase(); return t==='submit'||t==='button'||t==='image'||t==='reset'||t==='checkbox'||t==='radio'||t==='file'; } return false; }
   var tags=['input','textarea','select','button','a'];
   var roleTags={button:['button','a'],link:['a'],textbox:['input','textarea'],searchbox:['input'],combobox:['select'],spinbutton:['input'],checkbox:['input'],radio:['input'],switch:['input'],menuitem:['button','a'],tab:['button','a'],option:['option']};
   var out=[];
@@ -351,6 +361,11 @@ const intentDOMJS = `(function(){
       var el=els[j];
       if(el.disabled) continue;
       var type=(el.tagName==='INPUT')?(el.type||'text'):'';
+      // value= is for fillable tags only; a bare intent is for clickables. Skip
+      // the wrong family so a value-bearing "Search" finds the input, not the
+      // "Search" button (mirrors the a11y restriction in resolveIntent).
+      if(hasValue && !isFillableTag(tag,type)) continue;
+      if(!hasValue && !isClickableTag(tag,type)) continue;
       var keys=['aria-label','placeholder','name','id','title'];
       var best=null,bestAttr='';
       for(var k=0;k<keys.length;k++){
@@ -366,6 +381,11 @@ const intentDOMJS = `(function(){
       if(!best){ var txt=(el.textContent||'').trim(); if(txt && txt.toLowerCase().indexOf(needle)>=0){ best=txt; bestAttr='text'; } }
       if(!best) continue;
       var bl=best.toLowerCase(); var sc=10; if(bl===needle) sc=100; else if(bl.indexOf(needle)===0) sc=50;
+      // Role-aware boost: when the agent passed a value it wants to FILL, prefer
+      // text inputs/textareas/selects; when no value it wants to CLICK, prefer
+      // buttons/links. This stops a value-bearing "Search" intent from landing
+      // on a "Search" link instead of the search input.
+      if(hasValue && isFillableTag(tag,type)) sc+=20; else if(!hasValue && isClickableTag(tag,type)) sc+=20;
       out.push({tag:tag,type:type,attr:bestAttr,val:best,score:sc,sel:uniqueSel(el)});
     }
   }
@@ -394,7 +414,8 @@ type domCandidate struct {
 func (s *Session) resolveIntentDOMLocked(t *tab, intent, value, role string, nth int) (domCandidate, []domCandidate, error) {
 	needleJSON, _ := json.Marshal(strings.ToLower(strings.TrimSpace(intent)))
 	roleJSON, _ := json.Marshal(strings.ToLower(strings.TrimSpace(role)))
-	script := "var __needle=" + string(needleJSON) + "; var __role=" + string(roleJSON) + "; " + intentDOMJS
+	hasValueJSON, _ := json.Marshal(strings.TrimSpace(value) != "")
+	script := "var __needle=" + string(needleJSON) + "; var __role=" + string(roleJSON) + "; var __hasValue=" + string(hasValueJSON) + "; " + intentDOMJS
 	var raw string
 	if err := s.runTimeout(t, axPollTimeout, chromedp.Evaluate(script, &raw)); err != nil {
 		return domCandidate{}, nil, err

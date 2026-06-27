@@ -17,7 +17,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "3.0.0"
+const Version = "3.1.0"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 

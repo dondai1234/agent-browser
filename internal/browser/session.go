@@ -543,6 +543,14 @@ func (s *Session) buildTreeLocked() error {
 		return errors.New("no tab")
 	}
 	err := s.pullAXLocked(t)
+	if err == nil && s.treeLooksEmptyLocked(t) {
+		// The pull succeeded but returned a near-empty tree on a still-loading
+		// page (the rare case where readyState hit 'complete' but the AX tree
+		// hadn't caught up, or a late JS hydration). Retry once after a settle
+		// so nav never hands the agent an empty `see refs`.
+		time.Sleep(450 * time.Millisecond)
+		err = s.pullAXLocked(t)
+	}
 	if err == nil {
 		return nil
 	}
@@ -553,6 +561,44 @@ func (s *Session) buildTreeLocked() error {
 		return fmt.Errorf("build tree (page may have crashed or be unreachable): %w", err)
 	}
 	return nil
+}
+
+// treeLooksEmptyLocked reports a successful pull that nonetheless produced a
+// near-empty tree (no interactive elements + no headings) on a non-blank page -
+// the signal of a partial pull on a still-loading/hydrating page. about:blank is
+// legitimately empty. Caller must hold s.mu.
+func (s *Session) treeLooksEmptyLocked(t *tab) bool {
+	if t == nil || t.tree == nil {
+		return false
+	}
+	u := strings.ToLower(t.tree.URL)
+	if u == "" || strings.HasPrefix(u, "about:blank") || strings.HasPrefix(u, "about:") {
+		return false
+	}
+	return len(t.tree.Elems) == 0 && len(t.tree.Headings) == 0
+}
+
+// waitReadyCompleteLocked polls document.readyState until 'complete' or max,
+// returning as soon as the page finishes loading. Non-fatal: if it can't read
+// readyState or the page stays 'interactive' (a long-running SPA), it proceeds -
+// the signature poll + the empty-tree retry are the backstops. One cheap eval
+// per tick; on an already-complete page (every post-action re-snapshot) it
+// returns after a single eval. Caller must hold s.mu.
+func (s *Session) waitReadyCompleteLocked(t *tab, max time.Duration) {
+	deadline := time.Now().Add(max)
+	for {
+		var ready string
+		if err := s.runTimeout(t, 3*time.Second, chromedp.Evaluate(`document.readyState`, &ready)); err != nil {
+			return
+		}
+		if ready == "complete" {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
 }
 
 // buildTreeFastLocked is the post-action re-snapshot: ONE AX pull, no retry.
@@ -600,12 +646,22 @@ func axSig(nodes []*accessibility.Node) uint64 {
 }
 
 func (s *Session) pullAXLocked(t *tab) error {
+	// Wait for the page to finish loading BEFORE polling the AX signature. The
+	// signature poll can otherwise settle on a STABLE-BUT-INCOMPLETE tree: a
+	// heavy page (Wikipedia, SPAs) has a brief phase where the skeleton is
+	// rendered (two identical AX pulls) before the real content/inputs appear,
+	// so the poll returns a near-empty tree and `see refs` comes back empty on
+	// the first call (the "needed retry" failure). Waiting for readyState
+	// 'complete' (bounded, non-fatal) eliminates that race; the signature poll
+	// then catches late JS reflows. For post-action re-snapshots the page is
+	// already complete so this is one cheap eval.
+	s.waitReadyCompleteLocked(t, 2500*time.Millisecond)
 	// Poll until the AX-tree SIGNATURE stabilizes across two consecutive pulls.
 	// The signature (count + every node's role/name/value) catches BOTH
 	// structural changes (count) AND content changes (e.g. "Add to cart" ->
 	// "Remove": same count, different content) - count-only polling misses the
 	// latter. Returns as soon as the tree actually settles, so actions are fast
-	// on quick pages and only wait on genuinely slow ones. Capped at 1s.
+	// on quick pages and only wait on genuinely slow ones. Capped at 1.5s.
 	var (
 		nodes   []*accessibility.Node
 		title   string
@@ -613,7 +669,7 @@ func (s *Session) pullAXLocked(t *tab) error {
 		lastSig uint64
 		haveSig bool
 	)
-	deadline := time.Now().Add(1000 * time.Millisecond)
+	deadline := time.Now().Add(1500 * time.Millisecond)
 	for {
 		var (
 			n  []*accessibility.Node

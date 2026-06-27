@@ -117,6 +117,23 @@ func (s *Session) resolveAndActLocked(ctx context.Context, t *tab, intent, value
 		}
 		return "", nil, cands, "", rerr
 	}
+	// Role-appropriateness check: if the agent passed a VALUE it wants to FILL,
+	// but the a11y match is a clickable (a "Search" link matched before the
+	// search input did, or the input had no a11y name), try the DOM fallback for
+	// a fillable element and prefer it. This is the fix for intent targeting
+	// landing on the wrong element and forcing a selector fallback. Skipped when
+	// hover, when nth picked explicitly, or when the a11y match is already
+	// fillable/combobox (the clean case - no extra CDP call).
+	hasValue := strings.TrimSpace(value) != ""
+	if hasValue && !hover && nth == 0 && !isFillableRole(resolvedEl.Role) && resolvedEl.Role != "combobox" {
+		if domCand, _, domErr := s.resolveIntentDOMLocked(t, intent, value, role, 0); domErr == nil && isFillableDomCand(domCand) {
+			v, actErr := s.actOnDOMLocked(t, domCand, value)
+			if actErr != nil {
+				return v, &resolvedEl, nil, "", actErr
+			}
+			return v, &snapshot.Element{Ref: "dom", Role: domRoleFor(domCand), Name: domCand.Val}, nil, "", nil
+		}
+	}
 	id, err := s.resolveRefLocked(ctx, resolvedEl.Ref)
 	if err != nil {
 		return "", &resolvedEl, nil, "", err
@@ -126,6 +143,14 @@ func (s *Session) resolveAndActLocked(ctx context.Context, t *tab, intent, value
 	}
 	v, actErr := s.actOnElementLocked(ctx, id, resolvedEl.Role, value, resolvedEl.Ref)
 	return v, &resolvedEl, nil, "", actErr
+}
+
+// isFillableDomCand reports whether a DOM-fallback candidate is a text-like
+// input/textarea/select (i.e. act would FILL it, not click it). Used by the
+// role-appropriateness check so a value-bearing intent prefers a fillable DOM
+// match over a clickable a11y match.
+func isFillableDomCand(c domCandidate) bool {
+	return c.Tag == "textarea" || c.Tag == "select" || (c.Tag == "input" && isTextInputType(c.Type))
 }
 
 // selectorObjectIDLocked resolves a CSS selector on the top document to a remote

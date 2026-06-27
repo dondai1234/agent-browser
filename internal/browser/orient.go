@@ -2,7 +2,10 @@ package browser
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // defaultSettle is how long an act-and-see action waits for the DOM to settle
@@ -29,6 +32,28 @@ func (s *Session) ScrollInfo() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.scrollInfoLocked(s.curTabLocked())
+}
+
+// EnsureTree returns the cached page tree, re-pulling it first if it looks thin
+// (zero interactive elements + zero headings on a non-blank page). This is the
+// read-side self-heal: even if nav handed a partial tree (the rare case the
+// buildTree retry didn't catch), `see refs` / `find` rebuild before rendering so
+// the agent never sees an empty ref list that forces a retry. Returns
+// ErrNoSnapshot when there's no tab/page at all.
+func (s *Session) EnsureTree() (*snapshot.Tree, error) {
+	tree := s.Tree()
+	if tree == nil {
+		return nil, ErrNoSnapshot
+	}
+	u := strings.ToLower(tree.URL)
+	if len(tree.Elems) == 0 && len(tree.Headings) == 0 && u != "" && !strings.HasPrefix(u, "about:") {
+		_ = s.BuildTree()
+		tree = s.Tree()
+		if tree == nil {
+			return nil, ErrNoSnapshot
+		}
+	}
+	return tree, nil
 }
 
 // TabLine returns a "tab: t2 of 3 (label)" line for the current tab, or "" when

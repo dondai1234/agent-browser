@@ -1,5 +1,39 @@
 # Changelog
 
+## v3.1.0 - 2026-06-27 (reliability + targeting: no empty refs, precise intent)
+
+A reliability + targeting pass prompted by a live opencode head-to-head report:
+`see refs` came back empty on the first call (needed a retry) and intent targeting
+landed on the wrong element, forcing a CSS-selector fallback. Both fixed at the
+root, plus a stronger `js` helper API.
+
+- **No more empty `see refs`.** `pullAXLocked` now waits for
+  `document.readyState === 'complete'` (bounded, non-fatal) before the AX
+  signature poll, so a heavy page (Wikipedia, SPAs) can't settle on a
+  stable-but-incomplete skeleton and hand back a near-empty tree. `buildTree`
+  also retries once on an empty tree, and `see`/`find` self-heal: if the cached
+  tree is thin they re-pull before rendering. The opencode "see refs returned
+  empty, needed retry" failure is gone (150 ref-lines on the first call on
+  Wikipedia).
+- **Precise intent targeting (no selector fallback).** `value=` is for
+  fillable/combobox only (the `act` contract), so intent resolution now
+  restricts to fillable/combobox when a value is supplied - an exact-named
+  clickable (Wikipedia's "Search" button) can no longer outrank the search
+  input. The DOM-attribute fallback got the same role-aware filter + scoring.
+  `act "Search" value="Machine learning"` now fills the search box directly.
+- **`js` helpers: `prop(x,name)`, `form(sel)`, `meta(name)`** added (element
+  property, form serialization, <meta> content) for stronger scraping.
+
+### Verification
+
+- New `TestV3WikipediaSearchNoRetry` (live) reproduces the opencode task: nav
+  Wikipedia -> `see refs` 150 lines on the first call -> `act "Search"
+  value="Machine learning"` fills the input by intent (no selector) -> Enter
+  navigates to /wiki/Machine_learning. No retry needed.
+- New unit tests: `TestResolveIntentValueExcludesClickable` +
+  `TestResolveIntentNoValuePrefersClickableButton` pin the targeting fix.
+- Full live suite green (~257s, 0 failures); go build/vet/gofmt clean.
+
 ## v3.0.0 - 2026-06-27 (the rewrite: 22 tools -> 8 god-tier tools, `js` helper API, `nav` orientation, `see outline`)
 
 A ground-up rebuild of the tool surface for the agent that uses it. v2 grew to

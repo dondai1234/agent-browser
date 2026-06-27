@@ -25,15 +25,15 @@ func registerSee(srv *mcp.Server, sess *browser.Session) {
 		level := strings.ToLower(strings.TrimSpace(a.Level))
 		switch level {
 		case "", "brief":
-			tree := sess.Tree()
-			if tree == nil {
-				return errResult(browser.ErrNoSnapshot), nil, nil
+			tree, err := sess.EnsureTree()
+			if err != nil {
+				return errResult(err), nil, nil
 			}
 			return textResult(renderOrientation(sess, tree, snapshot.LevelBrief)), nil, nil
 		case "refs", "summary":
-			tree := sess.Tree()
-			if tree == nil {
-				return errResult(browser.ErrNoSnapshot), nil, nil
+			tree, err := sess.EnsureTree()
+			if err != nil {
+				return errResult(err), nil, nil
 			}
 			return textResult(tree.Render(snapshot.LevelSummary)), nil, nil
 		case "text":
@@ -49,9 +49,9 @@ func registerSee(srv *mcp.Server, sess *browser.Session) {
 			}
 			return textResult(out), nil, nil
 		case "full":
-			tree := sess.Tree()
-			if tree == nil {
-				return errResult(browser.ErrNoSnapshot), nil, nil
+			tree, err := sess.EnsureTree()
+			if err != nil {
+				return errResult(err), nil, nil
 			}
 			if err := sess.FillText(); err != nil {
 				return errResult(err), nil, nil
