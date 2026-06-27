@@ -1,11 +1,13 @@
-// Package mcpserver wires the browser.Session into an MCP server: 20 tools
-// (navigate, see, find, extract, read, click, act, fill, select, scroll, wait,
-// screenshot, eval, tabs, upload, press_key, hover, history, where, reset) served over
+// Package mcpserver wires the browser.Session into an MCP server: 22 tools
+// (navigate, see, find, extract, collect, read, click, act, fill, select, scroll, wait,
+// screenshot, eval, tabs, upload, press_key, hover, history, where, clear, reset) served over
 // stdio. v2 adds intent-first act, a verdict on every action, level=brief page
-// comprehension, extract (structured data), history (session memory offload),
-// semantic wait conditions, multi-field fill, scroll-awareness, browser
-// back/forward/reload, scroll-to-ref, link href on read, full-page/element
-// screenshots, and where (one-shot re-orientation).
+// comprehension, extract + collect (structured data), history (session memory
+// offload), semantic wait conditions, multi-field fill, scroll-awareness,
+// browser back/forward/reload, scroll-to-ref, link href on read, full-page/element
+// screenshots, where (one-shot re-orientation), clear (one-call clean slate),
+// extract targeting (selector + maxChars + text kind), and collect (multi-value
+// pull without JS).
 package mcpserver
 
 import (
@@ -17,7 +19,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "2.2.2"
+const Version = "2.4.0"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 
@@ -28,6 +30,7 @@ var toolRegistry = map[string]registerFunc{
 	"see":        registerSee,
 	"find":       registerFind,
 	"extract":    registerExtract,
+	"collect":    registerCollect,
 	"read":       registerRead,
 	"click":      registerClick,
 	"act":        registerAct,
@@ -43,13 +46,14 @@ var toolRegistry = map[string]registerFunc{
 	"hover":      registerHover,
 	"history":    registerHistory,
 	"where":      registerWhere,
+	"clear":      registerClear,
 	"reset":      registerReset,
 }
 
 // toolOrder is the deterministic registration order (map iteration is unordered).
 var toolOrder = []string{
-	"navigate", "see", "find", "extract", "read", "click", "act", "fill", "select", "scroll", "wait",
-	"screenshot", "eval", "tabs", "upload", "press_key", "hover", "history", "where", "reset",
+	"navigate", "see", "find", "extract", "collect", "read", "click", "act", "fill", "select", "scroll", "wait",
+	"screenshot", "eval", "tabs", "upload", "press_key", "hover", "history", "where", "clear", "reset",
 }
 
 // New builds an MCP server with all tools bound to a Session.

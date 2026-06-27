@@ -34,7 +34,7 @@ Measured head-to-head against the two largest browser-automation MCP servers:
 |---|:--:|:--:|:--:|
 | Snapshot of Hacker News | **~1,200 tok** | ~14,700 tok | ~9,800 tok |
 | Snapshot of a GitHub repo | **~1,250 tok** | ~21,600 tok | ~20,800 tok |
-| Cost to connect (tool defs + instructions) | **~3,650 tok** (20 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
+| Cost to connect (tool defs + instructions) | **~3,750 tok** (22 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
 | Saucedemo login (real task, all succeed) | **~154 tok** | ~1,714 tok | ~1,483 tok |
 
 <div align="center">
@@ -56,7 +56,8 @@ A second, success-normalized benchmark (`bench/successtoken`, 5 multi-step tasks
 - **`act` — intent-first actions.** Pass a control's name (`act "Sign in"`, `act "Username" value=x`); local heuristics resolve it (no LLM, no per-call cost), perform the right action for its role (click / fill / select), and return a verdict + delta. Collapses find + click/fill + see into one call. Ambiguous matches return ranked candidates — it never guesses; disambiguate with `nth` or `role`, or use `click`/`fill` by ref.
 - **Verdicts on every action.** `navigated to …` / `dialog opened: …` / `status: added to cart` / `changed: +1 -1 ~1` / `no visible effect` / `CHALLENGE: …`. For non-navigation actions it also folds in the XHR/Fetch responses that fired (`net: /api/cart 200`) — the "did my click hit the API" loop, closed without a re-see.
 - **`see level=brief` — page comprehension.** A ~50-token page brief: page type (login form / list / article / dialog), auth state (logged in / anonymous / blocked), the top primary actions with refs, regions, counts. Land oriented without scanning refs.
-- **`extract` — structured data, not ref-parsing.** `extract table` (rows, JSON; objects if the first row is headers), `extract links` (`[{text,href}]`), `extract list`, `extract form` (`[{ref,role,name,value}]` — feed it back to `act`/`fill`), `extract article` (main content text).
+- **`extract` — structured data, not ref-parsing.** `extract table` (rows, JSON; objects if the first row is headers), `extract links` (`[{text,href}]`), `extract list`, `extract form` (`[{ref,role,name,value}]` — feed it back to `act`/`fill`), `extract article` (main content text), `extract text` (each matched element's text, requires `selector`). Pass `selector=` to scope any kind to a region (just the infobox, just the releases list) and `maxChars=` to cap the length — the #1 token-saving lever.
+- **`collect` — named values in one call, no JS.** Pass `fields={label:selector}` (e.g. `{stars: ".stars", price: "#price", title: "h1"}`), get back `{label:value}` JSON. `attrs={label:attrName}` pulls an attribute (a link's href). One call for several specific values — a repo's stars + language + issues, or an article's title + first paragraph + infobox — replacing N `extract` calls or a custom `eval`.
 - **`history` — session memory offloaded from context.** A rolling log of step / action / verdict / URL. Query it (`last=N`, `errors=true`) to re-orient after a long flow instead of carrying the transcript in your context window.
 - **Semantic `wait` + multi-field `fill` + browser QoL.** `wait url=/text=/gone=` for conditions, not blind timeouts. `fill fields={ref:value}` for a whole form in one call. `navigate action=back|forward|reload`, `scroll ref=r12`, `read` on a link ref returns its `href`, `screenshot fullPage=true|ref=r12`, and `where` for a 30-token re-orientation when you lose your place.
 
@@ -110,19 +111,19 @@ where                                        →  url / page / auth / last actio
 
 Name the control, get a verdict. You rarely call `see` after an action — the verdict + delta tell you what happened. By-ref mode (`find` then `click r12`) still works when you need precision.
 
-## Tools (20)
+## Tools (22)
 
 **Orientation** — `see` (brief/minimal/summary/full) · `where` (30-token re-orientation) · `read` (link refs include `href`)
 
-**Intent-first actions** — `act` (resolve by name, no LLM) · `fill` (single or `{ref:value}` map) · `click` · `select` (value or visible text) · `hover` (fires CSS `:hover`) · `press_key` (native key events; Enter submits) · `scroll` (pixels or `ref`; reports position)
+**Intent-first actions** — `act` (resolve by name, no LLM) · `fill` (single or `{ref:value}` map) · `click` · `select` (by ref or CSS selector; value or visible text) · `hover` (fires CSS `:hover`) · `press_key` (native key events; Enter submits) · `scroll` (pixels or `ref`; reports position)
 
-**Find & extract** — `find` (incl. `selector=` CSS escape hatch) · `extract` (table / links / list / form / article → JSON)
+**Find & extract** — `find` (incl. `selector=` CSS escape hatch) · `extract` (table / links / list / form / article → JSON) · `collect` (named `{label:selector}` → `{label:value}` JSON in one call, no JS)
 
 **Navigation** — `navigate` (open / back / forward / reload) · `tabs` · `upload`
 
 **Observe** — `wait` (url/text/gone conditions) · `screenshot` (viewport / fullPage / ref) · `eval` (canvas, computed state, cookies, console errors)
 
-**Session** — `history` (rolling log, queryable) · `reset` (relaunch the browser — recover from a wedged tab or a crashed browser)
+**Session** — `history` (rolling log, queryable) · `clear` (one-call clean slate: wipe cookies + storage and reload) · `reset` (relaunch the browser — recover from a wedged tab or a crashed browser)
 
 Every tool's description is hand-crafted to tell the agent exactly what to pass, what it returns, and the gotcha. `eval` covers anything the typed tools can't expose.
 

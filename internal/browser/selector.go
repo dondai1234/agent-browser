@@ -158,6 +158,16 @@ func (s *Session) actBySelectorLocked(ctx context.Context, sel, value, mode stri
 		return verb, s.fillNodeLocked(ctx, id, value)
 	case mode == "click":
 		return verb, s.clickNodeLocked(ctx, id)
+	case mode == "select":
+		// Explicit select-by-selector: the element MUST be a <select>, else the
+		// agent used the wrong tool (click/fill/act for other tags).
+		if info.Tag != "select" {
+			return "select", fmt.Errorf("selector %q resolved a <%s>, not a <select>; use click/fill/act for other elements", sel, info.Tag)
+		}
+		if !hasValue {
+			return "select", fmt.Errorf("resolved a <select> (%q); pass a value to select an option", sel)
+		}
+		return "select", s.selectNodeLocked(ctx, id, value)
 	case info.Tag == "select":
 		if !hasValue {
 			return "select", fmt.Errorf("resolved a <select> (%q); pass a value to select an option", sel)
@@ -182,6 +192,17 @@ func (s *Session) ClickSelector(selector string, settle time.Duration) (*snapsho
 func (s *Session) FillSelector(selector, value string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
 	return s.mutateAndSee(fmt.Sprintf("fill selector %q =%q", selector, value), settle, func(ctx context.Context) error {
 		_, e := s.actBySelectorLocked(ctx, selector, value, "fill")
+		return e
+	})
+}
+
+// SelectSelector sets a <select> dropdown found by CSS selector and returns
+// the delta. The selector path for unlabeled dropdowns (no a11y name, no
+// name/id/placeholder for act's DOM fallback) - e.g. a sort <select> with only
+// a class. The element must be a <select>.
+func (s *Session) SelectSelector(selector, value string, settle time.Duration) (*snapshot.Delta, *snapshot.Tree, error) {
+	return s.mutateAndSee(fmt.Sprintf("select selector %q =%q", selector, value), settle, func(ctx context.Context) error {
+		_, e := s.actBySelectorLocked(ctx, selector, value, "select")
 		return e
 	})
 }

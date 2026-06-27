@@ -43,7 +43,7 @@ type tab struct {
 	// monotonic and NOT reset on navigation, so a stale ref from an earlier page
 	// (a lower number) can't collide with a current one. Reset only on a full
 	// browser relaunch (reset), which is a clean slate the agent knows about.
-	refMap    map[int64]string
+	refMap     map[int64]string
 	refCounter int
 
 	netMu     sync.Mutex
@@ -340,10 +340,10 @@ func (s *Session) ensureBrowserLocked() error {
 	if err := s.launchBrowserLocked(); err != nil {
 		if s.cfg.UserDataDir != "" {
 			// The requested (persistent) profile wouldn't start Chrome - locked by an
-		// orphaned Chrome from a prior run, corrupted, or otherwise unusable. Fall
-		// back to a throwaway temp profile so the op still works (no persistence,
-		// but alive). Without this, a locked profile makes every tool fail + the
-		// chromedp double-close panic crashes the server once a later op retries.
+			// orphaned Chrome from a prior run, corrupted, or otherwise unusable. Fall
+			// back to a throwaway temp profile so the op still works (no persistence,
+			// but alive). Without this, a locked profile makes every tool fail + the
+			// chromedp double-close panic crashes the server once a later op retries.
 			s.teardownBrowserLocked()
 			s.cfg.UserDataDir = ""
 			s.dead = nil
@@ -1145,6 +1145,73 @@ func (s *Session) finishResetLocked(url, action string) (*snapshot.Tree, error) 
 		}
 	}
 	s.recordHistoryLocked(action, verdict, url)
+	return c.tree, nil
+}
+
+// Clear wipes cookies + the current origin's web storage and reloads (or
+// navigates to rawURL if given), giving the agent a one-call clean slate. Use
+// it when the page carries leftover state from a previous run: a cart with
+// items you didn't add, a half-filled form, a logged-in session you want to
+// reset. Clears ALL cookies (every site) + the current origin's
+// localStorage/sessionStorage, then navigates to rawURL (or reloads the current
+// page) and returns the fresh orientation. Cheaper + cleaner than removing
+// items one by one. Other tabs keep their pages but lose their cookies too
+// (clean slate is global). Returns ErrNoSnapshot if there's no current page.
+func (s *Session) Clear(rawURL string) (*snapshot.Tree, error) {
+	target := ""
+	if rawURL != "" {
+		clean, err := ValidateURL(rawURL, s.AllowInsecureSchemes)
+		if err != nil {
+			return nil, err
+		}
+		target = clean
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.curTabLocked()
+	if t == nil || t.tree == nil {
+		return nil, ErrNoSnapshot
+	}
+	if target == "" {
+		target = t.tree.URL
+	}
+	// Clear the current origin's web storage while the old page is still loaded
+	// (localStorage.clear is per-origin and must run on a page of that origin).
+	// Best-effort: a null-storage page (about:blank) just no-ops.
+	_ = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, _, _ = runtime.Evaluate(`try{localStorage.clear()}catch(e){}; try{sessionStorage.clear()}catch(e){}`).Do(ctx)
+		return nil
+	}))
+	// Clear ALL cookies (global clean slate - the agent asked for a fresh state).
+	_ = s.run(t, network.ClearBrowserCookies())
+	// Navigate to the target so the page reflects the cleared state.
+	s.invalidateTabLocked(t)
+	if err := s.run(t, chromedp.Navigate(target), chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		return nil, fmt.Errorf("clear: navigate %s: %w", target, err)
+	}
+	if err := s.buildTreeLocked(); err != nil {
+		return nil, fmt.Errorf("clear: %w", err)
+	}
+	c := s.curTabLocked()
+	if c.tree != nil {
+		c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
+		if c.tree.Challenge != "" {
+			if s.waitForChallengeClearLocked(c, 8*time.Second) {
+				if err := s.buildTreeLocked(); err == nil {
+					c = s.curTabLocked()
+					c.tree.Challenge = detectChallengeTitleURL(c.tree.URL, c.tree.Title)
+				}
+			}
+		}
+	}
+	verdict := "cleared cookies + storage and reloaded"
+	if rawURL != "" {
+		verdict = fmt.Sprintf("cleared cookies + storage and navigated to %s", target)
+	}
+	if c.tree != nil && c.tree.Challenge != "" {
+		verdict = "clear -> CHALLENGE: " + c.tree.Challenge
+	}
+	s.recordHistoryLocked("clear", verdict, target)
 	return c.tree, nil
 }
 

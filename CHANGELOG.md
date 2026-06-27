@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.4.0 - 2026-06-27 (agent-efficiency: targeted extract, collect, clean slate, select-by-selector, batched fill)
+
+A pass on token + call efficiency for real agent workflows. Five changes:
+
+- **New `collect` tool.** Pass `fields={label:selector}`, get `{label:value}` JSON in one call - the multi-value pull without writing JS. Get a repo's stars + language + issues + latest release, or an article's title + first paragraph + infobox, in one call. `attrs={label:attrName}` pulls an attribute instead of text (e.g. a link's href). A selector that doesn't match returns `null` for that label (a partial result you can branch on, not an error). One call replaces N `extract` calls or a custom `eval`. Tool count 20 -> 22.
+- **`extract` now targets a region.** `selector=` scopes table/links/list/article to a CSS-matched element; a new `text` kind returns each matched element's text as a JSON array (the targeted value pull, no JS); `maxChars=` caps the response. `extract article selector="#firstHeading"` returns just the heading instead of the whole `<main>`.
+- **New `clear` tool - one-call clean slate.** Wipes cookies + the current origin's localStorage/sessionStorage and reloads (or opens a url), instead of removing leftover state item by item.
+- **`select` now takes a `selector`.** Brings select to parity with click/fill/act (all already had a selector escape hatch) - the path for unlabeled dropdowns the a11y tree has no name for (a sort `<select>` with only a class).
+- **`fill` description flipped** to lead with the batched form path (`fields={ref:value}` in one call) - the efficient default for a form. **`eval` description reframed** as the go-to for scattered scalars (return several fields as one object).
+
+### Verification
+
+- `TestRealWorldCollect` / `CollectMiss` / `CollectRequiresFields` / `CollectFormFlow` (live): one-call multi-value pull returns `{label:value}` JSON; `attrs` returns an attribute (a link's absolute href); a missing selector yields `null` (not an error); empty `fields` is an isError; a batched `fill fields={}` + `act "Login"` reaches the inventory.
+- `TestRealWorldExtractSelectorScope` / `ExtractText` / `ExtractTextRequiresSelector` / `ExtractMaxChars` / `ExtractSelectorMiss` (live): selector scoping shrinks output, `text` returns a JSON array of matches, `text` without a selector is an isError, `maxChars` caps + marks truncated, a non-matching selector is an isError with a pointer.
+- `TestRealWorldSelectSelector` (live): `select selector=".product_sort_container" value="Price (high to low)"` applies the sort - the priciest item lands before the cheapest in the inventory.
+- `TestRealWorldClear` / `ClearNavigate` (live): after login, `clear` wipes the session - saucedemo redirects to the login page; `clear url=` lands on the new page.
+- Full live suite green (1063s, 0 failures). `go build`/`go vet`/`gofmt` clean; `govulncheck` 0 reachable.
+
 ## v2.2.2 - 2026-06-25 (idle auto-close - Chrome tears down when not in use)
 
 v2.2.1 stopped Chrome spawning on startup, but once you navigated once, Chrome stayed alive for the whole MCP session - so a one-shot browser use left Chrome running for the rest of the chat. v2.2.2 adds an **idle auto-close**: a background reaper tears Chrome down after `--idle-timeout` (default **10m**) of no browser activity. The next navigate re-launches it seamlessly via the lazy-launch path (page state is lost - a fresh tab - so the agent re-navigates; read-only ops before that report "no page snapshot yet; call navigate first"). `--idle-timeout 0` disables it. The reaper polls at idleTimeout/4 (clamped 5-60s), only acts when the browser is actually up + genuinely idle, and never races an in-flight op (it takes the session lock, so it can only tear down between ops). Browser-touching ops reset the idle timer via `touchLocked` (in `curTabLocked` + `ensureBrowserLocked`); pure context ops (`history` with no browser use) don't keep Chrome alive.

@@ -54,7 +54,7 @@ func registerEval(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "eval",
-		Description: "Run arbitrary JavaScript in the page and return the JSON result. Enabled by default; the operator can disable with --no-eval. Use for what the typed tools don't cover: canvas/CSV extraction, computed styles, window state, history (window.history.back()/go()), cookies/localStorage (document.cookie, localStorage), console errors (window.onerror). For key actions (Enter/Escape/Tab) use press_key, and for hover use hover - real CDP input events, which unlike JS-dispatched events trigger native behavior and CSS :hover. Session persistence across restarts: start the server with --user-data-dir.",
+		Description: "Run JavaScript in the page and return the JSON result. The go-to for pulling specific values the page shows but extract can't target by selector - a star count, a price, a date, a status, or several at once (return them as one object: {stars:..., price:..., date:...}). One expression, no re-snapshot, no refs. Also covers what the typed tools don't: canvas/CSV extraction, computed styles, window state, history (window.history.back()/go()), cookies/localStorage (document.cookie, localStorage), console errors (window.onerror). Enabled by default; the operator can disable with --no-eval. For key actions (Enter/Escape/Tab) use press_key, and for hover use hover - real CDP input events, which unlike JS-dispatched events trigger native behavior and CSS :hover. Session persistence across restarts: start the server with --user-data-dir.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		out, err := sess.Eval(a.Script)

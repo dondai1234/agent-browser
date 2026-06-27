@@ -75,7 +75,7 @@ func registerFill(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fill",
-		Description: "Set input/textarea value(s) and return a verdict + the delta. Single field: pass ref + value. Whole form: pass fields={ref:value,...} (e.g. from extract form's refs) to fill many in one call - one round-trip + one delta instead of N. Uses the native value setter + dispatches input+change so React/Vue/etc. see the change. For <select> use select, not fill.",
+		Description: "Set input/textarea value(s) and return a verdict + the delta. Whole form: pass fields={ref:value,...} (e.g. from extract form's refs) to fill many inputs in ONE call - one round-trip + one delta instead of N. This is the default for a form - prefer it over N single-field calls. Single field: pass ref + value, or selector + value. Uses the native value setter + dispatches input+change so React/Vue/etc. see the change. For <select> use select, not fill.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		if len(a.Fields) > 0 {
@@ -105,15 +105,26 @@ func registerFill(srv *mcp.Server, sess *browser.Session) {
 
 func registerSelect(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Ref      string `json:"ref" jsonschema:"element ref of the <select> dropdown"`
+		Ref      string `json:"ref,omitempty" jsonschema:"element ref of the <select> dropdown. Mutually exclusive with selector."`
+		Selector string `json:"selector,omitempty" jsonschema:"CSS selector of the <select> dropdown (e.g. '.product_sort_container', 'select#country') - the path for unlabeled dropdowns the a11y tree has no name for (a sort <select> with only a class). Mutually exclusive with ref."`
 		Value    string `json:"value" jsonschema:"option to select: the option's value OR its visible display text (pass what the snapshot shows)"`
 		SettleMs int    `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "select",
-		Description: "Set a <select> dropdown's selection by ref and return a verdict + the delta. Value matches an option's value OR its visible text - pass what the snapshot shows.",
+		Description: "Set a <select> dropdown's selection and return a verdict + the delta. By ref (from see/find) OR by CSS selector (for an unlabeled dropdown the a11y tree has no name for - e.g. a sort <select> with only a class: select selector=\".product_sort_container\" value=\"Price (high to low)\"). Value matches an option's value OR its visible text - pass what the snapshot shows.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+		if sel := strings.TrimSpace(a.Selector); sel != "" {
+			delta, after, err := sess.SelectSelector(sel, a.Value, settleDur(a.SettleMs))
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			return textResult(deltaOut(delta, after)), nil, nil
+		}
+		if a.Ref == "" {
+			return errResult(fmt.Errorf("select needs a ref or a selector")), nil, nil
+		}
 		delta, after, err := sess.SelectAndSee(a.Ref, a.Value, settleDur(a.SettleMs))
 		if err != nil {
 			return errResult(err), nil, nil
