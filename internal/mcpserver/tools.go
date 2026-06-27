@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/dondai1234/agent-browser/v3/internal/browser"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // defaultSettle is how long an act-and-see action waits for the DOM to settle
@@ -55,4 +58,21 @@ func settleDur(settleMs int) time.Duration {
 		return time.Duration(settleMs) * time.Millisecond
 	}
 	return defaultSettle
+}
+
+// renderOrientation renders a page tree at the given level and appends the tab +
+// scroll lines for the orientation levels (brief/minimal), so `nav` and `session`
+// land the agent oriented in one call. Refs/full are dense lists - no tab/scroll.
+func renderOrientation(sess *browser.Session, tree *snapshot.Tree, level snapshot.Level) string {
+	if tree == nil {
+		return "no page snapshot (call nav)"
+	}
+	out := tree.Render(level)
+	if level == snapshot.LevelBrief || level == snapshot.LevelMinimal {
+		if tab := sess.TabLine(); tab != "" {
+			out += "\n" + tab
+		}
+		out += "\nscroll: " + sess.ScrollInfo()
+	}
+	return out
 }

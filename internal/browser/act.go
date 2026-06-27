@@ -13,7 +13,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/go-json-experiment/json/jsontext"
 
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // fillJS sets an input/textarea value via the native value setter + dispatches

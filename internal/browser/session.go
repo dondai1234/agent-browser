@@ -22,7 +22,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // ErrNoSnapshot is returned when the current tab has no cached page tree.

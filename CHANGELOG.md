@@ -1,5 +1,54 @@
 # Changelog
 
+## v3.0.0 - 2026-06-27 (the rewrite: 22 tools -> 8 god-tier tools, `js` helper API, `nav` orientation, `see outline`)
+
+A ground-up rebuild of the tool surface for the agent that uses it. v2 grew to
+22 tools and the agent danced between `see`/`extract`/`read`/`find`/`eval`
+guessing selectors. v3 collapses them into 8 composable tools an agent masters
+from the defs alone, with a first-class JS extraction path so getting data is
+one call, not a ping-pong. The battle-tested chromedp engine (lazy launch,
+per-op timeout, dead-session tracking, stable backend-keyed refs, AX pull +
+iframe merge, verdicts/deltas, stealth) is retained unchanged - v3 is the
+surface + cognition ergonomics.
+
+- **8 tools**: `nav`, `see`, `act`, `js`, `find`, `tabs`, `history`, `session`
+  (was 22). Connect cost drops from ~3,750 tok to ~1,900 tok.
+- **`js` - the structured-data hero.** Run JS with an injected helper API (`$`,
+  `$$`, `text`, `attr`, `html`, `visible`, `data`, `table`, `links`, `rect`,
+  `xpath`, `frame`, `wait`) and get clean JSON back. `await="sel"` waits first.
+  A thrown error is surfaced with the page-side message. Robust to both
+  expression and statement-body scripts (auto-retry on SyntaxError). Replaces
+  `eval` + `extract` + `collect`. The GitHub 6-field scrape is `nav` + one `js`
+  call.
+- **`nav` returns an orientation.** Navigate and land with page type + auth +
+  the top primary actions WITH refs + regions + counts - act immediately, no
+  separate `see`. `back`/`forward`/`reload`; `newTab=true`.
+- **`act` is any single action.** Name a control (intent) or give a ref/selector;
+  act clicks/fills/selects by role+value, or `hover=true`, `key=Enter`,
+  `files=[..]`. Optional `waitUrl=/waitText=/waitGone=` fuses a wait in. Fuses
+  v2's act/click/fill/select/hover/press_key/upload/wait.
+- **`see level=outline`** - the semantic skeleton (headings/tables/lists/forms/
+  regions) each with a WORKING css selector, so scraping starts from the right
+  selectors instead of guessing. Plus brief/refs/text/full/shot.
+- **`find` bridges refs and selectors.** By role/text -> refs; by `selector=` ->
+  `[css]` matches; `selectors=true` also gives a css selector per a11y match.
+- **`session mode=reset|clear`** fuses v2's reset + clear.
+
+### Verification
+
+- 25 live integration tests (gated `AGENT_BROWSER_INTEGRATION=1`) green against
+  example.com, saucedemo.com, and the-internet.herokuapp.com: nav orientation,
+  nav level=refs, js expression/object/links/await/error-capture, see
+  brief/refs/text/outline, find a11y/selector/selectors-bridge, act by
+  intent/ref/selector, ambiguous candidates, nth, hover (reveals caption), key
+  press (registers), upload (File Uploaded!), tabs new/switch/close, history,
+  session clear (drops login) + reset, act-needs-target error. Full suite
+  ~269s, 0 failures.
+- Unit tests green: navLevel, verbLabel, deltaOut (navigated/soft-fail/nil),
+  returnRe (expression vs body detection), parseErrObject (error vs data).
+- `go build`/`go vet`/`gofmt` clean; `govulncheck` 0 reachable.
+- Module path bumped `/v2` -> `/v3` (Go major-version requirement).
+
 ## v2.4.0 - 2026-06-27 (agent-efficiency: targeted extract, collect, clean slate, select-by-selector, batched fill)
 
 A pass on token + call efficiency for real agent workflows. Five changes:

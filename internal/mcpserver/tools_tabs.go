@@ -2,97 +2,52 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/v2/internal/browser"
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/browser"
 )
 
 func registerTabs(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Action string `json:"action" jsonschema:"list | new | switch | close | label"`
-		ID     string `json:"id,omitempty" jsonschema:"tab id or label (for switch/close)"`
-		URL    string `json:"url,omitempty" jsonschema:"url to open in the new tab (action=new; optional)"`
-		Label  string `json:"label,omitempty" jsonschema:"label to set on the current/new tab (action=label or new)"`
+		Action string `json:"action,omitempty" jsonschema:"list (default: list all tabs) | switch | close | label"`
+		ID     string `json:"id,omitempty" jsonschema:"tab id or label (e.g. t2, or a label you set); for switch/close"`
+		Label  string `json:"label,omitempty" jsonschema:"the label to set on the current tab (action=label)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "tabs",
-		Description: "Manage tabs. list: all tabs (* = current). new: open a tab (url optional) + make it current; returns its orientation. switch: switch to id/label; returns that tab's orientation. close: close id/label (refuses the last tab). label: name the current tab. New/switch save you a see call. Refs are per-tab - after switch/new, use the returned orientation's refs, not refs from another tab.",
+		Description: "Manage tabs. action=list (default) lists every tab (id, label, url, title, current). switch id=t2 makes that tab current. close id=t2 closes it (the last tab cannot be closed). label label=\"admin\" names the current tab so you can switch to it by name later. Open a NEW tab with nav newTab=true.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
-		switch a.Action {
+		action := strings.ToLower(strings.TrimSpace(a.Action))
+		switch action {
 		case "", "list":
-			return textResult(formatTabs(sess.Tabs())), nil, nil
-		case "new":
-			tree, err := sess.NewTab(a.URL)
+			tabs := sess.Tabs()
+			b, err := json.MarshalIndent(tabs, "", "  ")
 			if err != nil {
 				return errResult(err), nil, nil
 			}
-			if a.Label != "" {
-				_ = sess.SetTabLabel(a.Label)
-			}
-			if tree != nil {
-				return textResult(tree.Render(snapshot.LevelMinimal)), nil, nil
-			}
-			return textResult("opened new tab (empty)"), nil, nil
+			return textResult(string(b)), nil, nil
 		case "switch":
-			idOrLabel := a.ID
-			if idOrLabel == "" {
-				idOrLabel = a.Label
-			}
-			if err := sess.SwitchTab(idOrLabel); err != nil {
+			if err := sess.SwitchTab(a.ID); err != nil {
 				return errResult(err), nil, nil
 			}
-			// Like `new`: return the current tab's orientation if it has a
-			// snapshot, so the agent doesn't need a separate see after switching.
-			if tree := sess.Tree(); tree != nil {
-				return textResult(tree.Render(snapshot.LevelMinimal)), nil, nil
-			}
-			return textResult(formatTabs(sess.Tabs())), nil, nil
+			return textResult("switched to " + a.ID), nil, nil
 		case "close":
-			idOrLabel := a.ID
-			if idOrLabel == "" {
-				idOrLabel = a.Label
-			}
-			if err := sess.CloseTab(idOrLabel); err != nil {
+			if err := sess.CloseTab(a.ID); err != nil {
 				return errResult(err), nil, nil
 			}
-			return textResult(formatTabs(sess.Tabs())), nil, nil
+			return textResult("closed " + a.ID), nil, nil
 		case "label":
 			if err := sess.SetTabLabel(a.Label); err != nil {
 				return errResult(err), nil, nil
 			}
-			return textResult(formatTabs(sess.Tabs())), nil, nil
+			return textResult(fmt.Sprintf("labeled current tab %q", a.Label)), nil, nil
 		default:
-			return errResult(fmt.Errorf("unknown tabs action %q (list|new|switch|close|label)", a.Action)), nil, nil
+			return errResult(fmt.Errorf("unknown tabs action %q (list|switch|close|label)", action)), nil, nil
 		}
 	})
-}
-
-func formatTabs(tabs []browser.TabInfo) string {
-	if len(tabs) == 0 {
-		return "(no tabs)"
-	}
-	var b strings.Builder
-	for _, t := range tabs {
-		mark := "  "
-		if t.Current {
-			mark = "* "
-		}
-		fmt.Fprintf(&b, "%s%s", mark, t.ID)
-		if t.Label != "" {
-			fmt.Fprintf(&b, " (%s)", t.Label)
-		}
-		if t.URL != "" {
-			fmt.Fprintf(&b, " %s", t.URL)
-		}
-		if t.Title != "" {
-			fmt.Fprintf(&b, " %q", t.Title)
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
 }

@@ -12,20 +12,20 @@ func TestValidateKeyPress(t *testing.T) {
 		key     string
 		wantErr bool
 	}{
-		{"Enter", false},      // named key
-		{"Escape", false},     // named key
-		{"Tab", false},        // named key
-		{"ArrowDown", false},  // named key
-		{"a", false},          // single char
-		{"1", false},          // single char
-		{"/", false},          // single char
-		{" ", false},          // single space char (Space is also named; either path is fine)
-		{"A", false},          // single uppercase char
-		{"", true},            // empty
-		{"weather in tokyo", true},   // the exact failure from the live test
-		{"abc", true},         // multi-char
-		{"Enter+shift", true}, // not a named key, not single char (modifiers go via the modifiers field)
-		{"ctrl", true},        // modifier names are NOT keys
+		{"Enter", false},           // named key
+		{"Escape", false},          // named key
+		{"Tab", false},             // named key
+		{"ArrowDown", false},       // named key
+		{"a", false},               // single char
+		{"1", false},               // single char
+		{"/", false},               // single char
+		{" ", false},               // single space char (Space is also named; either path is fine)
+		{"A", false},               // single uppercase char
+		{"", true},                 // empty
+		{"weather in tokyo", true}, // the exact failure from the live test
+		{"abc", true},              // multi-char
+		{"Enter+shift", true},      // not a named key, not single char (modifiers go via the modifiers field)
+		{"ctrl", true},             // modifier names are NOT keys
 	}
 	for _, c := range cases {
 		err := validateKeyPress(c.key)

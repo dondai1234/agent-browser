@@ -1,0 +1,74 @@
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/dondai1234/agent-browser/v3/internal/browser"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+)
+
+func registerNav(srv *mcp.Server, sess *browser.Session) {
+	type args struct {
+		Action string `json:"action,omitempty" jsonschema:"open (default: navigate to url) | back | forward | reload"`
+		URL    string `json:"url,omitempty" jsonschema:"URL to open (action=open; http/https only; other schemes blocked unless --allow-insecure-schemes). Required for open and for newTab."`
+		NewTab bool   `json:"newTab,omitempty" jsonschema:"open url in a new tab (makes it current); requires url. back/forward/reload ignore this."`
+		Label  string `json:"label,omitempty" jsonschema:"optional memorable label for a new tab (e.g. \"admin\")"`
+		Level  string `json:"level,omitempty" jsonschema:"orientation detail to return: brief (default: page type + auth + primary actions with refs + regions + counts) | minimal (url/title/landmarks/headings/counts) | refs (interactive list with refs) | full (refs + visible text)"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "nav",
+		Description: "Navigate and return an orientation, so you can act immediately without a separate see. action=open (default) opens url on the current tab; back/forward traverse browser history; reload re-fetches the current page. newTab=true opens url in a new tab (makes it current; pass label= to name it). back/forward with no history is a no-op (returns the current page). Default level=brief: page type, auth state, the top primary actions WITH refs (e.g. 'r3 button \"Login\"'), regions, interactive counts - act from here. Use level=refs for the full interactive list, level=full to also see text. Every nav detects bot-check interstitials (Cloudflare/captcha) and surfaces CHALLENGE:.",
+		Annotations: openWorld(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+		action := strings.ToLower(strings.TrimSpace(a.Action))
+		level := navLevel(a.Level)
+		var tree *snapshot.Tree
+		var err error
+		switch action {
+		case "", "open":
+			if a.NewTab {
+				if strings.TrimSpace(a.URL) == "" {
+					return errResult(fmt.Errorf("newTab needs a url")), nil, nil
+				}
+				tree, err = sess.NewTab(a.URL)
+				if err == nil && strings.TrimSpace(a.Label) != "" {
+					_ = sess.SetTabLabel(a.Label)
+				}
+			} else {
+				tree, err = sess.NavigateAndSee(a.URL)
+			}
+		case "back", "forward", "reload":
+			tree, err = sess.NavigateAction(action)
+		default:
+			return errResult(fmt.Errorf("unknown nav action %q (open|back|forward|reload)", action)), nil, nil
+		}
+		if err != nil {
+			return errResult(err), nil, nil
+		}
+		if tree == nil {
+			return textResult("new tab opened (blank)"), nil, nil
+		}
+		if level == snapshot.LevelFull {
+			if err := sess.FillText(); err != nil {
+				return errResult(err), nil, nil
+			}
+		}
+		return textResult(renderOrientation(sess, tree, level)), nil, nil
+	})
+}
+
+// navLevel parses the level arg, defaulting to brief (the v3 orientation win:
+// nav lands you with page type + primary-action refs instead of a bare url).
+func navLevel(s string) snapshot.Level {
+	switch snapshot.Level(strings.ToLower(strings.TrimSpace(s))) {
+	case snapshot.LevelMinimal, snapshot.LevelSummary, snapshot.LevelFull:
+		return snapshot.Level(s)
+	case "refs":
+		return snapshot.LevelSummary
+	}
+	return snapshot.LevelBrief
+}

@@ -154,18 +154,18 @@ func TestBuildTreeDropsDecorativeUnfocused(t *testing.T) {
 		n := &accessibility.Node{Role: axStr(role), Name: axStr(name), BackendDOMNodeID: backend}
 		if focusable {
 			n.Properties = append(n.Properties, &accessibility.Property{
-				Name: accessibility.PropertyNameFocusable,
+				Name:  accessibility.PropertyNameFocusable,
 				Value: &accessibility.Value{Value: jsontext.Value(`true`)},
 			})
 		}
 		return n
 	}
 	tree := BuildTree([]*accessibility.Node{
-		mk("button", "", 1, false),           // decorative: unnamed + unfocusable -> DROP
-		mk("button", "Save", 2, false),       // named custom (unfocusable) -> KEEP
-		mk("button", "", 3, true),            // native icon button (focusable, unnamed) -> KEEP
-		mk("link", "", 4, false),             // decorative link -> DROP
-		mk("textbox", "", 5, true),           // unlabeled input (focusable) -> KEEP (act DOM fallback needs it)
+		mk("button", "", 1, false),     // decorative: unnamed + unfocusable -> DROP
+		mk("button", "Save", 2, false), // named custom (unfocusable) -> KEEP
+		mk("button", "", 3, true),      // native icon button (focusable, unnamed) -> KEEP
+		mk("link", "", 4, false),       // decorative link -> DROP
+		mk("textbox", "", 5, true),     // unlabeled input (focusable) -> KEEP (act DOM fallback needs it)
 	})
 	refs := map[int64]bool{}
 	for _, e := range tree.Elems {

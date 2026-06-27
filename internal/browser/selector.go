@@ -10,7 +10,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // findSelectorJS runs querySelectorAll(selector) on the top document and returns
@@ -114,6 +114,69 @@ func RenderSelectorMatches(ms []SelectorMatch) string {
 		fmt.Fprintf(&b, "... and %d more (narrow the selector)\n", len(ms)-20)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// uniqueSelJS computes a unique CSS selector for `this` (a resolved DOM node):
+// #id when present, else a nth-child path up to the nearest id/document root.
+// Used by SelectorForRef so a find-by-a11y result can also be addressed by CSS
+// selector in `js` - bridging the a11y-ref world and the selector world.
+const uniqueSelJS = `function(){
+  if(this && this.id){ try { return '#'+CSS.escape(this.id); } catch(e){} }
+  var parts=[]; var el=this;
+  while(el && el.nodeType===1 && el!==document.documentElement){
+    var p=el.parentNode;
+    if(!p){ parts.unshift(el.tagName.toLowerCase()); break; }
+    var idx=Array.prototype.indexOf.call(p.children, el)+1;
+    parts.unshift(el.tagName.toLowerCase()+':nth-child('+idx+')');
+    el=p;
+    if(el && el.id){ try { parts.unshift('#'+CSS.escape(el.id)); break; } catch(e){} }
+  }
+  return parts.join(' > ');
+}`
+
+// SelectorForRef resolves a stable ref to a unique CSS selector on the current
+// tab, so an element located via the a11y tree (find by role/text) can also be
+// targeted by selector in `js`. One resolve + one cheap eval. Returns an error
+// if the ref is gone or has no backing DOM node (a virtual a11y node).
+func (s *Session) SelectorForRef(ref string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.curTabLocked()
+	if t == nil || t.tree == nil {
+		return "", ErrNoSnapshot
+	}
+	el, ok := t.tree.ByRef(ref)
+	if !ok {
+		return "", fmt.Errorf("ref %q not found; call see to refresh refs", ref)
+	}
+	if el.Backend == 0 {
+		return "", fmt.Errorf("ref %q has no backing DOM node (virtual a11y node); use selector= in find instead", ref)
+	}
+	var sel string
+	err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		id, e := s.resolveBackendLocked(ctx, el.Backend, ref)
+		if e != nil {
+			return e
+		}
+		res, exc, e := runtime.CallFunctionOn(uniqueSelJS).WithReturnByValue(true).WithObjectID(id).Do(ctx)
+		if e != nil {
+			return fmt.Errorf("selector for ref %q: %w", ref, e)
+		}
+		if exc != nil {
+			return fmt.Errorf("selector for ref %q: %s", ref, exc.Text)
+		}
+		if res != nil && len(res.Value) > 0 {
+			_ = json.Unmarshal(res.Value, &sel)
+		}
+		return nil
+	}))
+	if err != nil {
+		return "", err
+	}
+	if sel == "" {
+		return "", fmt.Errorf("ref %q resolved to no selector", ref)
+	}
+	return sel, nil
 }
 
 // actBySelectorLocked resolves a CSS selector to a remote object id on the top

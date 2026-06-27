@@ -8,62 +8,129 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/v2/internal/browser"
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/browser"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 func registerAct(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Intent   string `json:"intent,omitempty" jsonschema:"the name/label of the control to act on, e.g. \"Sign in\", \"Username\", \"Add to cart\". Resolved on the cached snapshot (local heuristics, no LLM); the right action for the role is performed (click buttons/links, fill inputs, select combobox options) and a verdict + delta are returned. Mutually exclusive with selector."`
-		Selector string `json:"selector,omitempty" jsonschema:"CSS selector to act on directly (e.g. \"div[role=widget]\", \".btn-checkout\") - the escape hatch for elements the a11y tree does NOT surface (custom widgets, presentational nodes). Auto-detects tag/type: click buttons/links, fill text inputs (pass value), select <select> (pass value). Mutually exclusive with intent."`
-		Value    string `json:"value,omitempty" jsonschema:"for an input/combobox target: the value to fill or the option to select; ignored for click targets"`
-		Role     string `json:"role,omitempty" jsonschema:"constrain the match to a role (button, link, textbox, ...) to disambiguate"`
-		Nth      int    `json:"nth,omitempty" jsonschema:"pick from the ranked matches to disambiguate when several controls share a name; positive = 1-based from the top (nth=1 = best), negative = from the end (nth=-1 = last, -2 = second-last) - e.g. the priciest of N identical Add-to-cart buttons without counting"`
-		SettleMs int    `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before re-snapshot (default 150; raise for slow SPAs)"`
+		Intent    string   `json:"intent,omitempty" jsonschema:"the control's name/label to act on, e.g. \"Sign in\", \"Username\", \"Add to cart\". Resolved on the cached snapshot (local heuristics, no LLM); act does the right thing for its role. Mutually exclusive with ref/selector."`
+		Ref       string   `json:"ref,omitempty" jsonschema:"a stable ref from see/find (e.g. r12) to act on precisely. Mutually exclusive with intent/selector."`
+		Selector  string   `json:"selector,omitempty" jsonschema:"CSS selector to act on directly (e.g. \".btn-checkout\", \"div[role=widget]\") - the escape hatch for elements the a11y tree does NOT surface. Mutually exclusive with intent/ref."`
+		Value     string   `json:"value,omitempty" jsonschema:"for an input/dropdown target: the value to fill or the option to select (by value or visible text). Ignored for click/hover/press/upload."`
+		Role      string   `json:"role,omitempty" jsonschema:"constrain intent matches to a role (button, link, textbox, ...) to disambiguate"`
+		Nth       int      `json:"nth,omitempty" jsonschema:"disambiguate ambiguous intent matches: positive = 1-based from the top (nth=1 = best), negative = from the end (nth=-1 = last)"`
+		Hover     bool     `json:"hover,omitempty" jsonschema:"hover the target (fires CSS :hover + mouseover) instead of clicking - for hover-only menus/tooltips"`
+		Key       string   `json:"key,omitempty" jsonschema:"press a key (named key: Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space; or a single char). Acts on the focused element by default; pass ref or intent to focus a target first (Enter on a chosen input submits its form). Mutually exclusive with the click/fill/select/hover/upload modes."`
+		Modifiers string   `json:"modifiers,omitempty" jsonschema:"key modifiers, '+'-joined: ctrl, shift, alt, meta (e.g. \"ctrl\", \"ctrl+shift\"); for key= only"`
+		Files     []string `json:"files,omitempty" jsonschema:"file paths to upload; target a file input by ref/selector/intent, or omit to auto-find the first input[type=file]. Mutually exclusive with the other modes."`
+		WaitURL   string   `json:"waitUrl,omitempty" jsonschema:"after the action, wait for the URL to contain this before re-snapshotting (e.g. \"/dashboard\") - fuses act+wait so the delta reflects the landed page"`
+		WaitText  string   `json:"waitText,omitempty" jsonschema:"after the action, wait for this text to appear in the body before re-snapshotting"`
+		WaitGone  string   `json:"waitGone,omitempty" jsonschema:"after the action, wait for this text to DISAPPEAR from the body before re-snapshotting (e.g. a spinner clearing)"`
+		WaitMs    int      `json:"waitMs,omitempty" jsonschema:"wait budget in ms (default 10000)"`
+		SettleMs  int      `json:"settleMs,omitempty" jsonschema:"ms to let the DOM settle before the wait/re-snapshot (default 150; raise for slow SPAs)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "act",
-		Description: "Act by intent: pass a control's name (e.g. \"Sign in\", \"Username\", \"Add to cart\"); the tool resolves it on the cached snapshot with local heuristics (no LLM) and performs the default action for its role - click buttons/links, fill textbox/searchbox (pass value), select combobox (pass value) - returning a verdict + delta. Collapses find + click/fill + see into one call. If several controls match it returns the ranked candidates; disambiguate with nth or role, or use click/fill by ref. Two-tier matching: first the a11y name (label/placeholder/aria-label), then, on no match, the DOM name/id/placeholder/title/aria-label - so poorly-labeled inputs (only a name=/id= you know from HTML or extract form) are still reachable by intent. The response names the resolved ref + verb so you stay in control.",
+		Description: "Do ONE thing to the page. Name a control (intent) or give a ref/selector; act performs the right action for it and returns a VERDICT + DELTA (you usually do NOT re-see after - the verdict tells you what happened). Modes: (1) click/fill/select - DEFAULT: act clicks buttons/links, fills text inputs (pass value=), selects dropdowns (pass value=, by value or visible text) - the verb is picked from the element's role + whether value is set. (2) hover=true - hover the target (fires CSS :hover, reveals hover menus). (3) key= - press a key on the focused element (Enter submits, Escape closes, Tab moves focus); pass ref/intent to target it. (4) files=[..] - upload (target by ref/selector/intent, or auto-find the file input). Target resolution: intent uses the a11y name first, then a DOM name/id/placeholder/aria-label fallback for poorly-labeled inputs; ref is a stable see/find ref; selector is the CSS escape hatch. Ambiguous intent matches return ranked candidates (disambiguate with nth/role) - act never guesses. Optional waitUrl/waitText/waitGone fuses a wait into the action (the re-snapshot happens after the wait). Verdicts: navigated to / dialog opened / status / changed / page updated / no visible effect / CHALLENGE; non-nav actions also fold in the XHR/Fetch responses that fired (net:).",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
-		if sel := strings.TrimSpace(a.Selector); sel != "" {
-			verb, d, after, err := sess.ActSelector(sel, a.Value, settleDur(a.SettleMs))
-			if err != nil {
-				return errResult(err), nil, nil
-			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "act selector %q -> (%s)\n", sel, verb)
-			b.WriteString(deltaOut(d, after))
-			return textResult(b.String()), nil, nil
+		// One action category must be set (target + a mode, or a key, or files).
+		hasTarget := strings.TrimSpace(a.Intent) != "" || strings.TrimSpace(a.Ref) != "" || strings.TrimSpace(a.Selector) != ""
+		if a.Key == "" && len(a.Files) == 0 && !hasTarget {
+			return errResult(errors.New("act needs a target (intent, ref, or selector) OR key= (press a key) OR files= (upload)")), nil, nil
 		}
-		if strings.TrimSpace(a.Intent) == "" {
-			return errResult(errors.New("intent or selector required: pass a control name (intent) or a CSS selector (selector)")), nil, nil
+		if a.Key != "" && (a.Value != "" || a.Hover || len(a.Files) > 0) {
+			return errResult(errors.New("key= is mutually exclusive with value/hover/files (press a key OR click/fill/select/hover/upload, not both)")), nil, nil
 		}
-		res, err := sess.Act(a.Intent, a.Value, a.Role, a.Nth, settleDur(a.SettleMs))
+		if len(a.Files) > 0 && (a.Value != "" || a.Hover || a.Key != "") {
+			return errResult(errors.New("files= is mutually exclusive with value/hover/key (upload OR click/fill/select/hover/press, not both)")), nil, nil
+		}
+		if a.Key != "" && strings.TrimSpace(a.Selector) != "" {
+			return errResult(errors.New("key= targets via ref or intent (to focus the element), not selector - use ref or intent to target a key press")), nil, nil
+		}
+
+		res, err := sess.Perform(browser.PerformArgs{
+			Intent: a.Intent, Ref: a.Ref, Selector: a.Selector, Value: a.Value, Role: a.Role, Nth: a.Nth,
+			Hover: a.Hover, Key: a.Key, Modifiers: a.Modifiers, Files: a.Files,
+			WaitURL: a.WaitURL, WaitText: a.WaitText, WaitGone: a.WaitGone, WaitMs: a.WaitMs, SettleMs: a.SettleMs,
+		})
 		if err != nil {
-			// Ambiguous (candidates present) or no-match or fillable-needs-value:
-			// surface the message, and append the candidate list when ambiguous so
-			// the agent can disambiguate without a separate find.
 			msg := err.Error()
-			if res != nil && res.CandidatesText != "" {
-				msg += "\nmatches:\n" + res.CandidatesText
-			} else if res != nil && len(res.Candidates) > 0 {
-				limit := len(res.Candidates)
-				if limit > 8 {
-					limit = 8
-				}
-				msg += "\nmatches:\n" + snapshot.RenderElements(res.Candidates[:limit])
-				if len(res.Candidates) > 8 {
-					msg += fmt.Sprintf("\n... and %d more (pass a more specific name, or role/nth to pick)", len(res.Candidates)-8)
+			if res != nil {
+				if res.CandidatesText != "" {
+					msg += "\nmatches:\n" + res.CandidatesText
+				} else if len(res.Candidates) > 0 {
+					limit := len(res.Candidates)
+					if limit > 8 {
+						limit = 8
+					}
+					msg += "\nmatches:\n" + snapshot.RenderElements(res.Candidates[:limit])
+					if len(res.Candidates) > 8 {
+						msg += fmt.Sprintf("\n... and %d more (pass a more specific name, or role/nth to pick)", len(res.Candidates)-8)
+					}
 				}
 			}
 			return errResult(errors.New(msg)), nil, nil
 		}
-		// Acted: name the resolved ref + verb, then the verdict + delta (same
-		// format as click/fill, so the agent's parsing is uniform).
 		var b strings.Builder
-		fmt.Fprintf(&b, "act %q -> [%s] %s %q (%s)\n", a.Intent, res.Resolved.Ref, res.Resolved.Role, res.Resolved.Name, res.Verb)
+		switch {
+		case res.Resolved != nil:
+			fmt.Fprintf(&b, "act %s %q -> [%s] %s %q (%s)\n", verbLabel(res.Verb), a.Intent, res.Resolved.Ref, res.Resolved.Role, res.Resolved.Name, res.Verb)
+		case res.Verb == "press":
+			fmt.Fprintf(&b, "press %s @%s\n", a.Key, res.Target)
+		case res.Verb == "upload":
+			fmt.Fprintf(&b, "upload %d file(s)\n", len(a.Files))
+		case res.Target != "":
+			fmt.Fprintf(&b, "%s %s (%s)\n", verbLabel(res.Verb), res.Target, res.Verb)
+		default:
+			fmt.Fprintf(&b, "%s\n", res.Verb)
+		}
 		b.WriteString(deltaOut(res.Delta, res.After))
 		return textResult(b.String()), nil, nil
 	})
+}
+
+// verbLabel maps a verb to the action-log prefix for the result header.
+func verbLabel(verb string) string {
+	switch verb {
+	case "fill":
+		return "fill"
+	case "select":
+		return "select"
+	case "hover":
+		return "hover"
+	case "upload":
+		return "upload"
+	case "press":
+		return "press"
+	default:
+		return "click"
+	}
+}
+
+// deltaOut renders an act-and-see result: the verdict first, then the delta
+// detail; on navigation the verdict already names the url, so we append the new
+// page orientation (the refs the agent needs next).
+func deltaOut(delta *snapshot.Delta, after *snapshot.Tree) string {
+	var out string
+	if delta != nil && delta.Verdict != "" {
+		out = "verdict: " + delta.Verdict + "\n"
+	}
+	if delta == nil {
+		return out
+	}
+	if delta.Navigated {
+		if after != nil {
+			out += after.Render(snapshot.LevelMinimal)
+		}
+		return out
+	}
+	if after == nil {
+		// Soft-fail: the action fired but the page wouldn't re-snapshot in one
+		// pull (navigating/wedged); the verdict already says to call see.
+		return out
+	}
+	out += delta.Render()
+	return out
 }

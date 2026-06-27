@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 func treeWith(elems ...snapshot.Element) *snapshot.Tree {
@@ -26,7 +26,7 @@ func TestResolveIntentSingle(t *testing.T) {
 func TestResolveIntentExactWinsOverSubstring(t *testing.T) {
 	tr := treeWith(
 		el("r1", "button", "Sign in", 1),           // exact
-		el("r2", "link", "Sign in with Google", 2),  // substring
+		el("r2", "link", "Sign in with Google", 2), // substring
 	)
 	got, _, err := resolveIntent(tr, "Sign in", "", "", 0)
 	if err != nil || got.Ref != "r1" {

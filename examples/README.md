@@ -56,15 +56,16 @@ config-file setup.
 
 ## Notes
 
-- **18 tools** load by default: navigate, see (brief/minimal/summary/full),
-  find, extract (table/links/list/form/article), read, click, act (intent-first),
-  fill (single or `{ref:value}` map), select, scroll, wait, screenshot, eval,
-  tabs, upload, press_key, hover, history.
+- **8 tools** load by default: nav, see (brief/refs/text/outline/full/shot),
+  act (click/fill/select/hover/press/upload by intent/ref/selector + optional
+  wait), js (run JS with a helper API -> clean JSON), find (by role/text or
+  selector; `selectors=true` for both), tabs, history, session (reset/clear).
+  v3 collapsed the v2 22-tool surface into a few god-tier composable tools.
 - **Persistence**: by default agent-browser keeps a Chrome profile at
   `<os config dir>/agent-browser` so logins/cookies survive restarts - the agent
   doesn't re-login every run. One profile per process (Chrome locks it); for
   concurrent clients, pass distinct `--user-data-dir` args. Use `--no-persist`
   for a throwaway profile.
-- **eval** is on by default (add `--no-eval` to disable). **Stealth** is on by
+- **js** is on by default (add `--no-eval` to disable). **Stealth** is on by
   default (add `--no-stealth` to disable). See the root [README](../README.md)
   for the full flag list.

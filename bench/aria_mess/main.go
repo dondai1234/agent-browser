@@ -32,8 +32,8 @@ import (
 
 	"github.com/chromedp/cdproto/accessibility"
 
-	"github.com/dondai1234/agent-browser/v2/internal/browser"
-	"github.com/dondai1234/agent-browser/v2/internal/snapshot"
+	"github.com/dondai1234/agent-browser/v3/internal/browser"
+	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
 )
 
 // pathology is one test page: a name + its HTML.
