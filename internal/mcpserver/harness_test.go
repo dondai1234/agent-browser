@@ -72,6 +72,14 @@ func callToolResult(t *testing.T, sess *mcp.ClientSession, ctx context.Context, 
 // realWorldSetup builds the binary and connects an MCP client. Gated by
 // AGENT_BROWSER_INTEGRATION=1 (needs Chrome + network).
 func realWorldSetup(t *testing.T) (*mcp.ClientSession, context.Context, func()) {
+	return realWorldSetupWithFlags(t)
+}
+
+// realWorldSetupWithFlags builds the binary + connects an MCP client, passing
+// extra args to the `mcp` subcommand (e.g. --allow-insecure-schemes for
+// data/localhost fixtures, --no-cookie-dismiss to test the opt-out). Gated by
+// AGENT_BROWSER_INTEGRATION=1.
+func realWorldSetupWithFlags(t *testing.T, extraArgs ...string) (*mcp.ClientSession, context.Context, func()) {
 	t.Helper()
 	if os.Getenv("AGENT_BROWSER_INTEGRATION") != "1" {
 		t.Skip("set AGENT_BROWSER_INTEGRATION=1 to run (needs Chrome + network)")
@@ -85,7 +93,8 @@ func realWorldSetup(t *testing.T) (*mcp.ClientSession, context.Context, func()) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	client := mcp.NewClient(&mcp.Implementation{Name: "v3-client", Version: "v0.0.1"}, nil)
-	cmd := exec.Command(bin, "mcp", "--no-persist")
+	args := append([]string{"mcp", "--no-persist"}, extraArgs...)
+	cmd := exec.Command(bin, args...)
 	transport := &mcp.CommandTransport{Command: cmd}
 	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {

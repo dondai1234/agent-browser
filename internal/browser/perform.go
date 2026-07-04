@@ -67,21 +67,45 @@ func (s *Session) actOnElementLocked(ctx context.Context, id runtime.RemoteObjec
 		}
 		return "fill", s.fillNodeLocked(ctx, id, value)
 	case role == "combobox" && hasValue:
-		// A combobox may be a native <select> (select the option) OR an ARIA
-		// combobox over a textarea/input (autocomplete widgets have no .options,
-		// so selectJS no-ops). Probe the tag: SELECT -> select; else fill (the
-		// native value setter + input/change is what React/Vue autocompletes hear).
-		var isSelect bool
-		if res, _, e := runtime.CallFunctionOn(`function(){return this.tagName==='SELECT'}`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
-			_ = json.Unmarshal(res.Value, &isSelect)
+		// A combobox is one of three things, picked by probing the tag/type:
+		//   1. native <select>        -> selectJS (set the option)
+		//   2. text input/textarea     -> fill (autocomplete: React/Vue hear input/change)
+		//   3. button/div + listbox    -> open-select dance (open popup, click option)
+		var tagType string
+		if res, _, e := runtime.CallFunctionOn(`function(){return this.tagName + '/' + (this.type||''); }`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
+			_ = json.Unmarshal(res.Value, &tagType)
 		}
-		if isSelect {
+		tag := strings.SplitN(tagType, "/", 2)[0]
+		switch {
+		case tag == "SELECT":
 			return "select", s.selectNodeLocked(ctx, id, value)
+		case tag == "INPUT" || tag == "TEXTAREA":
+			return "fill", s.fillNodeLocked(ctx, id, value)
+		default:
+			if _, e := s.openSelectByIDLocked(ctx, id, value); e != nil {
+				return "open-select", e
+			}
+			return "open-select", nil
 		}
-		return "fill", s.fillNodeLocked(ctx, id, value)
 	case role == "combobox":
 		return "select", fmt.Errorf("resolved [%s] is a combobox; pass value= to select an option", ref)
 	default:
+		// value= on a non-fillable/non-combobox: if it's a listbox-combobox the AX
+		// tree reported as a plain button (aria-haspopup=listbox, no role=combobox),
+		// open-select; otherwise just click (the value is ignored - a misuse, but
+		// the click is the safe default, never a guess).
+		if hasValue {
+			var hp string
+			if res, _, e := runtime.CallFunctionOn(`function(){return this.getAttribute('aria-haspopup')||''; }`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
+				_ = json.Unmarshal(res.Value, &hp)
+			}
+			if strings.Contains(strings.ToLower(hp), "listbox") {
+				if _, e := s.openSelectByIDLocked(ctx, id, value); e != nil {
+					return "open-select", e
+				}
+				return "open-select", nil
+			}
+		}
 		return "click", s.clickNodeLocked(ctx, id)
 	}
 }
@@ -123,9 +147,11 @@ func (s *Session) resolveAndActLocked(ctx context.Context, t *tab, intent, value
 	// a fillable element and prefer it. This is the fix for intent targeting
 	// landing on the wrong element and forcing a selector fallback. Skipped when
 	// hover, when nth picked explicitly, or when the a11y match is already
-	// fillable/combobox (the clean case - no extra CDP call).
+	// fillable/combobox (the clean case - no extra CDP call). Also skipped for a
+	// listbox-combobox (a button with aria-haspopup=listbox): value= there means
+	// SELECT an option via open-click, not fill a text input.
 	hasValue := strings.TrimSpace(value) != ""
-	if hasValue && !hover && nth == 0 && !isFillableRole(resolvedEl.Role) && resolvedEl.Role != "combobox" {
+	if hasValue && !hover && nth == 0 && !isFillableRole(resolvedEl.Role) && resolvedEl.Role != "combobox" && !isListboxCombobox(resolvedEl) {
 		if domCand, _, domErr := s.resolveIntentDOMLocked(t, intent, value, role, 0); domErr == nil && isFillableDomCand(domCand) {
 			v, actErr := s.actOnDOMLocked(t, domCand, value)
 			if actErr != nil {

@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.2.0 - 2026-07-04 (real-world fluency: universal login, cookie-banner dismiss, custom dropdowns, stealth hardening)
+
+A real-world-fluency pass: the tool now handles the three things that break agents on actual sites (login, consent overlays, custom dropdowns) + the 2026 stealth vectors. New `login` tool (9th) + three engine hardenings, all live-tested against real sites.
+
+- **`login` tool (universal one-call login).** `login username= password= url=` does the whole login dance in ONE call (today's 6-10 round-trips, often silent-failure). Detects username + password + submit (heuristics from the logon-detector research: type=email, autocomplete=username, name/id/aria-label matching user/email/login/identifier, fallback the first text input in the password's form). Handles single-step (most sites) AND multi-step (Google/Microsoft/banks: username -> Next -> password appears -> submit) under one call. Detects OAuth/SSO buttons and REPORTS them instead of auto-clicking (they open a third-party flow you must drive with act). **State-verified verdict** (the silent-failure guard - we check the resulting STATE, not the return status): `logged in` | `2FA/mfa needed` | `CHALLENGE: ...` | `error: <message>` | `still on login page` | `no login form found: ...`.
+- **Cookie/consent banner auto-dismiss.** The #1 real-world blocker (overlays the page, intercepts clicks, bloats the AX tree). On every navigate, a high-confidence scan (OneTrust/Didomi/Quantcast/TrustArc/Cookiebot + cookie-context scoring, reject > accept, capped clicks - adapted from the cookie-pop-up-auto-rejector approach) dismisses the banner; the orientation surfaces `consent: rejected cookies (onetrust)` so the agent knows. `--no-cookie-dismiss` disables; ON by default (like stealth). High-confidence only so a real dialog is never dismissed.
+- **Custom combobox open-select.** `act value=X` on a button+listbox dropdown (aria-haspopup=listbox - the W3C pattern a native <select> can't express) now does the open-select dance: click to open -> wait for the listbox -> click the matching role=option -> re-snapshot. Closes the native-select-only gap (country pickers, category dropdowns). A combobox whose accessible NAME is empty but whose VALUE carries its label (Chrome's button-combobox quirk) is now addressable by intent.
+- **Stealth hardening (2026 vectors).** Permission API consistency (`Notification.permission='default'` <-> `permissions.query` returns 'prompt' - the consistent pair; the earlier mismatch was a tell), nonzero `outerWidth/Height` (headless=0 tell), `navigator.connection` (undefined-in-headless tell). The CDP runtime signal remains the documented hard limit.
+
+### Verification
+
+- `TestLoginSaucedemo` (REAL saucedemo): `login standard_user/secret_sauce` -> `logged in` + `/inventory.html`.
+- `TestLoginWrongPassword` (REAL saucedemo, wrong creds): `error: do not match` (not a silent 'logged in').
+- `TestLoginMultiStepLocal` (2-step fixture: username -> Next -> password -> Sign in): `logged in`.
+- `TestLoginMultiStepWrong`: `error: Wrong password`.
+- `TestCookieDismissLocal` (OneTrust-style banner): `consent: rejected cookies (onetrust)`; banner gone from refs + text.
+- `TestCookieDismissDisabled` (--no-cookie-dismiss): banner left intact.
+- `TestComboboxOpenSelectLocal` (W3C button+listbox): `act value=Japan` -> option selected (read back from the page's span, not the return).
+- `TestStealthHardening` (real example.com): notif=default, perm=prompt, outerW=1366, conn=4g, webdriver=false.
+- Full live suite green (398s, 0 failures). `govulncheck` 0 reachable.
+
 ## v3.1.0 - 2026-06-27 (reliability + targeting: no empty refs, precise intent)
 
 A reliability + targeting pass prompted by a live opencode head-to-head report:

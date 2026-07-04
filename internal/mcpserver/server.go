@@ -17,7 +17,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "3.1.0"
+const Version = "3.2.0"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 
@@ -32,10 +32,11 @@ var toolRegistry = map[string]registerFunc{
 	"tabs":    registerTabs,
 	"history": registerHistory,
 	"session": registerSession,
+	"login":   registerLogin,
 }
 
 // toolOrder is the deterministic registration order (map iteration is unordered).
-var toolOrder = []string{"nav", "see", "act", "js", "find", "tabs", "history", "session"}
+var toolOrder = []string{"nav", "see", "act", "js", "find", "tabs", "history", "session", "login"}
 
 // New builds an MCP server with all tools bound to a Session.
 func New(sess *browser.Session, opts *mcp.ServerOptions) (*mcp.Server, error) {

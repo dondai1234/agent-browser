@@ -55,6 +55,43 @@ const stealthInitScript = `(() => {
     }
   } catch(e) {}
   try { if (window.Notification) { Object.defineProperty(Notification, 'permission', { get: () => 'default' }); } } catch(e) {}
+  // Permission API consistency: Notification.permission='default' is the
+  // unrequested state; the Permissions API expresses the SAME state as 'prompt'
+  // (its enum is granted/denied/prompt, NOT default). A real Chrome returns
+  // 'prompt' for an unrequested notifications permission, so make query agree
+  // with the spoofed Notification.permission by mapping notifications -> 'prompt'.
+  // Returning 'default' from query is itself a tell (not a valid Permissions state).
+  // Other permissions are left to the real API so we don't break geolocation/camera.
+  if (navigator.permissions && navigator.permissions.query) {
+    try {
+      var origQuery = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = function(desc) {
+        try {
+          var name = (desc && desc.name) ? String(desc.name).toLowerCase() : '';
+          if (name === 'notifications') return Promise.resolve({ state: 'prompt', onchange: null });
+          return origQuery(desc);
+        } catch(e) { return origQuery(desc); }
+      };
+    } catch(e) {}
+  }
+  // Headless Chrome reports outerWidth/outerHeight === 0 (no real window chrome);
+  // real Chrome reports nonzero. Patch to match the inner viewport + a plausible
+  // chrome border so the outer-dims bot check passes.
+  try {
+    if (window.outerWidth === 0 || window.outerHeight === 0) {
+      Object.defineProperty(window, 'outerWidth', { get: () => Math.max(window.innerWidth, 1366) + 16 });
+      Object.defineProperty(window, 'outerHeight', { get: () => Math.max(window.innerHeight, 768) + 88 });
+    }
+  } catch(e) {}
+  // navigator.connection is undefined in headless but present on real Chrome
+  // (Network Information API). Expose a plausible effectiveType so its absence
+  // isn't a tell. Non-enumerable to avoid tripping feature-detection that looks
+  // for a freshly-added property.
+  try {
+    if (!navigator.connection) {
+      Object.defineProperty(navigator, 'connection', { value: { effectiveType: '4g', rtt: 50, downlink: 10, saveData: false }, enumerable: false });
+    }
+  } catch(e) {}
 })();`
 
 // detectChallengeTitleURL returns a non-empty challenge label if the page title

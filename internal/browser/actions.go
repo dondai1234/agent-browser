@@ -37,6 +37,13 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.navigateLocked(clean)
+}
+
+// navigateLocked is the lock-held core of NavigateAndSee (so a caller that
+// already holds s.mu - e.g. Login - can navigate without a re-entrant lock
+// deadlock). `clean` must already be a validated URL. Caller must hold s.mu.
+func (s *Session) navigateLocked(clean string) (*snapshot.Tree, error) {
 	if err := s.ensureBrowserLocked(); err != nil {
 		return nil, err
 	}
@@ -72,12 +79,32 @@ func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 			cur.tree.Challenge = ch
 		}
 	}
+	// Auto-dismiss a cookie/consent banner before orienting the agent. It's the
+	// #1 real-world blocker (overlays the page, intercepts clicks, bloats the
+	// AX tree). High-confidence only (OneTrust/Didomi/... + cookie-context
+	// scoring) so a real dialog is never dismissed. Skips on a challenge page
+	// (the verdict is the block, not the banner). A settle lets the removal
+	// animation finish before the tree rebuild.
+	overlayVerdict := ""
+	if cur.tree.Challenge == "" {
+		if label := s.dismissOverlaysLocked(cur); label != "" {
+			overlayVerdict = label
+			time.Sleep(overlaySettle)
+			if err := s.buildTreeLocked(); err == nil {
+				cur = s.curTabLocked()
+				cur.tree.Challenge = detectChallengeTitleURL(cur.tree.URL, cur.tree.Title)
+			}
+			cur.tree.Overlay = overlayVerdict
+		}
+	}
 	navVerdict := fmt.Sprintf("navigated to %s", cur.tree.URL)
 	if cur.tree.Title != "" {
 		navVerdict += fmt.Sprintf(" %q", cur.tree.Title)
 	}
 	if cur.tree.Challenge != "" {
 		navVerdict = "CHALLENGE: " + cur.tree.Challenge
+	} else if overlayVerdict != "" {
+		navVerdict += "; " + overlayVerdict
 	}
 	s.recordHistoryLocked(fmt.Sprintf("navigate %s", clean), navVerdict, cur.tree.URL)
 	return cur.tree, nil

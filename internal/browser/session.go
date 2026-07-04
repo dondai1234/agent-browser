@@ -245,16 +245,17 @@ const maxHistory = 200
 
 // Config configures a Session.
 type Config struct {
-	Headless    bool
-	Timeout     time.Duration // >0 bounds the first tab (debug CLI); 0 = long-lived (MCP server)
-	UserDataDir string        // persistent profile dir; "" = a throwaway temp profile (the MCP server defaults this to <os config dir>/agent-browser for persistence unless --no-persist)
-	Proxy       string        // proxy server URL (e.g. http://user:pass@host:port); "" = none
-	UserAgent   string        // override the User-Agent; "" = Chrome default
-	ViewportW   int           // window width; 0 = 1366
-	ViewportH   int           // window height; 0 = 768
-	Stealth     bool          // apply anti-detection flags + init script + jittered mouse (default true)
-	OpTimeout   time.Duration // per-CDP-operation timeout (default 30s); bounds any single chromedp.Run so a hung page can't wedge the session mutex + deadlock every tool. Raise for very slow pages.
-	IdleTimeout time.Duration // auto-close Chrome after this long with no browser activity (default 10m); 0 disables. The next navigate re-launches (page state is lost - re-navigate).
+	Headless         bool
+	Timeout          time.Duration // >0 bounds the first tab (debug CLI); 0 = long-lived (MCP server)
+	UserDataDir      string        // persistent profile dir; "" = a throwaway temp profile (the MCP server defaults this to <os config dir>/agent-browser for persistence unless --no-persist)
+	Proxy            string        // proxy server URL (e.g. http://user:pass@host:port); "" = none
+	UserAgent        string        // override the User-Agent; "" = Chrome default
+	ViewportW        int           // window width; 0 = 1366
+	ViewportH        int           // window height; 0 = 768
+	Stealth          bool          // apply anti-detection flags + init script + jittered mouse (default true)
+	OpTimeout        time.Duration // per-CDP-operation timeout (default 30s); bounds any single chromedp.Run so a hung page can't wedge the session mutex + deadlock every tool. Raise for very slow pages.
+	IdleTimeout      time.Duration // auto-close Chrome after this long with no browser activity (default 10m); 0 disables. The next navigate re-launches (page state is lost - re-navigate).
+	NoOverlayDismiss bool          // disable the cookie/consent banner auto-dismiss on navigate (on by default; frees the AX tree + clicks on real sites)
 }
 
 // New launches Chrome and returns a Session with one initial tab. If Chrome

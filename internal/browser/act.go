@@ -137,7 +137,16 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 			continue
 		}
 		name := strings.ToLower(el.Name)
-		if name == "" || !strings.Contains(name, needle) {
+		matched := name != "" && strings.Contains(name, needle)
+		// A custom combobox (button+listbox) often has no accessible NAME - Chrome
+		// puts its visible label/selection in the VALUE (e.g. combobox ="Select a
+		// country"). Match the intent against the value too so an unnamed combobox
+		// is addressable by its label (scored below a real name match).
+		valMatch := false
+		if !matched && el.Role == "combobox" && el.Value != "" {
+			valMatch = strings.Contains(strings.ToLower(el.Value), needle)
+		}
+		if !matched && !valMatch {
 			continue
 		}
 		sc := 10
@@ -268,39 +277,58 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 			return s.fillNodeLocked(ctx, id, value)
 		}))
 	case resolved.Role == "combobox" && strings.TrimSpace(value) != "":
-		// A combobox may be a native <select> (select the option) OR an ARIA
-		// combobox over a textarea/input (Google search, autocomplete widgets) -
-		// those have no .options, so selectJS no-ops on them. Probe the tag:
-		// SELECT -> select the option; otherwise fill (native value setter +
-		// input/change, which is what React/Vue autocompletes actually listen for).
+		// A combobox is one of three things, picked by probing the tag/type:
+		//   1. native <select>           -> selectJS (set the option)
+		//   2. a text input/textarea      -> fill (autocomplete: React/Vue hear input/change)
+		//   3. a button/div + listbox     -> open-select dance (open popup, click option)
 		actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, err := s.resolveRefLocked(ctx, resolved.Ref)
 			if err != nil {
 				return err
 			}
-			var isSelect bool
-			if res, _, e := runtime.CallFunctionOn(`function(){return this.tagName==='SELECT'}`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
-				_ = json.Unmarshal(res.Value, &isSelect)
+			var tagType string
+			if res, _, e := runtime.CallFunctionOn(`function(){return this.tagName + '/' + (this.type||''); }`).WithObjectID(id).Do(ctx); e == nil && res != nil && len(res.Value) > 0 {
+				_ = json.Unmarshal(res.Value, &tagType)
 			}
-			if isSelect {
+			tag := strings.SplitN(tagType, "/", 2)[0]
+			switch {
+			case tag == "SELECT":
 				verb = "select"
 				return s.selectNodeLocked(ctx, id, value)
+			case tag == "INPUT" || tag == "TEXTAREA":
+				verb = "fill"
+				return s.fillNodeLocked(ctx, id, value)
+			default:
+				// button/div listbox-combobox: open the popup + click the option.
+				verb = "open-select"
+				_, e := s.openSelectComboboxLocked(ctx, t, resolved.Ref, value)
+				return e
 			}
-			verb = "fill"
-			return s.fillNodeLocked(ctx, id, value)
 		}))
 	case resolved.Role == "combobox":
 		// A combobox/select with no value: clicking it usually just opens the
 		// dropdown (rarely the intent). Tell the agent to pass a value.
 		return &ActResult{Resolved: &resolved}, fmt.Errorf("resolved [%s] %s %q is a combobox; pass a value to select an option (or name a clickable control)", resolved.Ref, resolved.Role, resolved.Name)
 	default:
-		actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
-			id, err := s.resolveRefLocked(ctx, resolved.Ref)
-			if err != nil {
-				return err
-			}
-			return s.clickNodeLocked(ctx, id)
-		}))
+		// A button/link: normally just click. But if the agent passed a VALUE and
+		// this is a listbox-combobox (a button with aria-haspopup=listbox), value=
+		// means SELECT an option - run the open-select dance instead of a bare
+		// click (a bare click would only open the popup and leave it open).
+		if strings.TrimSpace(value) != "" && isListboxCombobox(resolved) {
+			verb = "open-select"
+			actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+				_, e := s.openSelectComboboxLocked(ctx, t, resolved.Ref, value)
+				return e
+			}))
+		} else {
+			actErr = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+				id, err := s.resolveRefLocked(ctx, resolved.Ref)
+				if err != nil {
+					return err
+				}
+				return s.clickNodeLocked(ctx, id)
+			}))
+		}
 	}
 	if actErr != nil {
 		s.recordActionErrorLocked(before, fmt.Sprintf("act %q (%s)", intent, verb), actErr)
