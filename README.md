@@ -16,7 +16,7 @@
 
 <br>
 
-<img src="docs/img/flow.svg" width="780" alt="Intent-first flow: the agent names a control, the tool resolves + acts, a verdict comes back">
+<img src="docs/img/flow.png" width="780" alt="Intent-first flow: the agent names a control, the tool resolves + acts, a verdict comes back">
 
 </div>
 
@@ -38,7 +38,7 @@ Measured head-to-head against the two largest browser-automation MCP servers:
 | Saucedemo login (real task, all succeed) | **~154 tok** | ~1,714 tok | ~1,483 tok |
 
 <div align="center">
-<img src="docs/img/tokens.svg" width="760" alt="Bar chart: saucedemo login token cost, agent-browser ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
+<img src="docs/img/tokens.png" width="760" alt="Bar chart: saucedemo login token cost, agent-browser ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
 </div>
 
 Within Playwright MCP's ballpark on connect cost (and now lighter: 9 tools, ~1,900 tok to connect), and **for that you also get five things neither has**: intent-first `act`, action `verdict`s, a JS helper API (`js`) for one-call structured data, a one-call universal `login` (single + multi-step, state-verified), and `history`. On a real task the gap is ~10x: the login above is now a single `login` call (or `nav` + three `act` calls) instead of find, fill, fill, find, click, re-see, re-see.
@@ -63,7 +63,7 @@ A real-world-fluency pass: the tool now handles the three things that break agen
 ## The cognition layer
 
 <div align="center">
-<img src="docs/img/cognition.svg" width="820" alt="Three layers: cognition (act/verdict/see/js/history) over the token-efficient engine (dense refs, deltas, JSON) over chromedp">
+<img src="docs/img/cognition.png" width="820" alt="Three layers: cognition (act/verdict/see/js/history) over the token-efficient engine (dense refs, deltas, JSON) over chromedp">
 </div>
 
 - **`act`: one tool for any single action.** Name a control (`act "Sign in"`, `act "Username" value=x`) OR give a ref/selector; local heuristics resolve it (no LLM, no per-call cost) and do the right thing for its role: click buttons/links, fill inputs (pass `value=`), select dropdowns (pass `value=`), **open-select a custom button+listbox dropdown** (pass `value=`; it opens the popup and clicks the matching option). Add `hover=true` to hover, `key=Enter` to press a key (Enter submits, Escape closes), `files=[..]` to upload. Optional `waitUrl=/waitText=/waitGone=` fuses a wait into the action. Collapses find + click/fill/select + see into one call. Ambiguous matches return ranked candidates; it never guesses; disambiguate with `nth` or `role`, or use a ref.
