@@ -34,7 +34,7 @@ Measured head-to-head against the two largest browser-automation MCP servers:
 |---|:--:|:--:|:--:|
 | Snapshot of Hacker News | **~1,200 tok** | ~14,700 tok | ~9,800 tok |
 | Snapshot of a GitHub repo | **~1,250 tok** | ~21,600 tok | ~20,800 tok |
-| Cost to connect (tool defs + instructions) | **~1,900 tok** (8 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
+| Cost to connect (tool defs + instructions) | **~1,900 tok** (9 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
 | Saucedemo login (real task, all succeed) | **~154 tok** | ~1,714 tok | ~1,483 tok |
 
 <div align="center">
