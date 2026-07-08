@@ -1,0 +1,76 @@
+name: Bug report
+description: Something doesn't work as documented on a real site
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. agent-browser is judged on real
+        sites, so include the exact page and the actual tool output.
+  - type: input
+    id: version
+    attributes:
+      label: agent-browser version
+      description: Output of `agent-browser --version`
+      placeholder: "agent-browser v3.2.0"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Which client drove the tools (Claude Code, Cursor, opencode, ...)
+      placeholder: "Claude Code"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "Windows 11 / macOS 14 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: page
+    attributes:
+      label: Target page
+      description: The URL you were driving. A public, reproducible URL is best.
+      placeholder: "https://saucedemo.com"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: "`act \"Login\"` navigates to /inventory.html and the verdict says `navigated to`."
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Paste the actual tool output (the verdict + delta, or the error).
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: The minimal sequence of tool calls that triggers it.
+      placeholder: |
+        1. nav https://...
+        2. act "..." value=...
+        3. see level=refs
+    validations:
+      required: true
+  - type: checkboxes
+    id: stealth
+    attributes:
+      label: Flags in use
+      options:
+        - label: "--no-stealth"
+        - label: "--no-eval"
+        - label: "--no-cookie-dismiss"
+        - label: "--headless=false"
+        - label: "--proxy-server"

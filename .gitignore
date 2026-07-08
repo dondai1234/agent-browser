@@ -1,19 +1,33 @@
-# agent-browser build artifacts
-/agent-browser.exe
+# --- build artifacts ---
 /agent-browser
+/agent-browser.exe
 /dist/
 *.log
+*.exe
 
-# Go
+# --- Go ---
 vendor/
 
-# OS
+# --- OS ---
 .DS_Store
 Thumbs.db
 
-# head-to-head / stray artifacts
-*.exe
+# --- head-to-head / stray artifacts ---
 .playwright-mcp/
 
-# internal project status (not shipped)
+# --- personal / agent scratch (never commit) ---
+# These are internal status/notes for the maintainer and AI agent, not part of
+# the public product. They stay local.
 STATUS.md
+PROJECT.md
+PLAN.md
+TODO.md
+research/
+notes/
+scratch/
+.pi/
+.claude/
+.cursor/
+keys.md
+.env
+.env.local

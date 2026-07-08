@@ -19,7 +19,7 @@ Both servers responded to initial tool calls. No installation issues.
 
 ## 2. Per-Task Results
 
-### Task A — GitHub Repo Intel
+### Task A: GitHub Repo Intel
 
 | Metric | agent-browser | @playwright/mcp |
 |--------|---------------|-----------------|
@@ -33,7 +33,7 @@ Both servers responded to initial tool calls. No installation issues.
 
 ---
 
-### Task B — Saucedemo Purchase Flow
+### Task B: Saucedemo Purchase Flow
 
 | Metric | agent-browser | @playwright/mcp |
 |--------|---------------|-----------------|
@@ -49,7 +49,7 @@ Both servers responded to initial tool calls. No installation issues.
 
 ---
 
-### Task C — Wikipedia Article Extraction
+### Task C: Wikipedia Article Extraction
 
 | Metric | agent-browser | @playwright/mcp |
 |--------|---------------|-----------------|
@@ -84,19 +84,19 @@ Both servers responded to initial tool calls. No installation issues.
 
 **agent-browser cons:**
 - Refs go stale after navigation/actions, requiring extra `see` calls
-- No batch form-fill — each field needs its own `fill` call
+- No batch form-fill; each field needs its own `fill` call
 - `extract` requires you to guess CSS selectors; no built-in "get this region" abstraction
 
 **@playwright/mcp pros:**
 - `fill_form` batches multiple fields into one call (saves tool calls)
-- `evaluate` is a Swiss army knife — you can pull any data with custom JS
+- `evaluate` is a Swiss army knife: you can pull any data with custom JS
 - `select_option` is explicit and works reliably
 - `snapshot` gives deep DOM tree with refs that persist better
 
 **@playwright/mcp cons:**
 - `evaluate` requires you to write JS, which adds cognitive load
 - `snapshot` output is verbose and harder to scan
-- No high-level `extract` abstraction — you always drop to JS
+- No high-level `extract` abstraction; you always drop to JS
 
 **Overall:** They're genuinely close. **agent-browser edges out on Task A** (simpler API for structured extraction). **@playwright/mcp edges out on Task B** (batched form fill) and **Task C** (single evaluate call). If I had to pick one to drive repeatedly, I'd lean toward **@playwright/mcp** for its flexibility and lower call count, but agent-browser's `extract` tool is a real strength for data-pulling tasks.
 

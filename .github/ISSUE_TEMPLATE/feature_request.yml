@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a new capability or a tool-surface improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        agent-browser prefers fewer, more powerful tools over many overlapping
+        ones. Before proposing a new tool, consider whether the capability fits
+        into an existing tool (often `act` or `js`).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What real-site task is hard or costs too many calls today?
+      placeholder: "Logging in to a site with a 2-step password page takes 6 round-trips."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposed change
+      description: The tool/flag/behavior change. If it's a new tool, why it can't fold into an existing one.
+      placeholder: "A `login` tool that detects username/password/submit and reports a state-verified verdict in one call."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      placeholder: "Doing it with `act` + `js` today costs N calls because ..."
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I considered whether this folds into an existing tool rather than adding one
+          required: true

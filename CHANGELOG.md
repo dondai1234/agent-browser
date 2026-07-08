@@ -1,395 +1,354 @@
 # Changelog
 
-## v3.2.0 - 2026-07-04 (real-world fluency: universal login, cookie-banner dismiss, custom dropdowns, stealth hardening)
+All notable changes to **agent-browser** are documented here.
 
-A real-world-fluency pass: the tool now handles the three things that break agents on actual sites (login, consent overlays, custom dropdowns) + the 2026 stealth vectors. New `login` tool (9th) + three engine hardenings, all live-tested against real sites.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- **`login` tool (universal one-call login).** `login username= password= url=` does the whole login dance in ONE call (today's 6-10 round-trips, often silent-failure). Detects username + password + submit (heuristics from the logon-detector research: type=email, autocomplete=username, name/id/aria-label matching user/email/login/identifier, fallback the first text input in the password's form). Handles single-step (most sites) AND multi-step (Google/Microsoft/banks: username -> Next -> password appears -> submit) under one call. Detects OAuth/SSO buttons and REPORTS them instead of auto-clicking (they open a third-party flow you must drive with act). **State-verified verdict** (the silent-failure guard - we check the resulting STATE, not the return status): `logged in` | `2FA/mfa needed` | `CHALLENGE: ...` | `error: <message>` | `still on login page` | `no login form found: ...`.
-- **Cookie/consent banner auto-dismiss.** The #1 real-world blocker (overlays the page, intercepts clicks, bloats the AX tree). On every navigate, a high-confidence scan (OneTrust/Didomi/Quantcast/TrustArc/Cookiebot + cookie-context scoring, reject > accept, capped clicks - adapted from the cookie-pop-up-auto-rejector approach) dismisses the banner; the orientation surfaces `consent: rejected cookies (onetrust)` so the agent knows. `--no-cookie-dismiss` disables; ON by default (like stealth). High-confidence only so a real dialog is never dismissed.
-- **Custom combobox open-select.** `act value=X` on a button+listbox dropdown (aria-haspopup=listbox - the W3C pattern a native <select> can't express) now does the open-select dance: click to open -> wait for the listbox -> click the matching role=option -> re-snapshot. Closes the native-select-only gap (country pickers, category dropdowns). A combobox whose accessible NAME is empty but whose VALUE carries its label (Chrome's button-combobox quirk) is now addressable by intent.
-- **Stealth hardening (2026 vectors).** Permission API consistency (`Notification.permission='default'` <-> `permissions.query` returns 'prompt' - the consistent pair; the earlier mismatch was a tell), nonzero `outerWidth/Height` (headless=0 tell), `navigator.connection` (undefined-in-headless tell). The CDP runtime signal remains the documented hard limit.
+## [Unreleased]
+
+## [3.2.0] - 2026-07-04
+
+Real-world fluency: the tool now handles the three things that break agents on
+actual sites (login, consent overlays, custom dropdowns) plus the 2026 stealth
+vectors. New `login` tool (9th) and three engine hardenings.
+
+### Added
+
+- `login` tool: universal one-call login. `login username= password= url=`
+  detects the username + password + submit fields (heuristics from the
+  logon-detector research: `type=email`, `autocomplete=username`, name/id/
+  aria-label matching user/email/login/identifier, fallback the first text
+  input in the password's form), fills them, submits, and reports a
+  state-verified verdict: `logged in` | `2FA/mfa needed` | `CHALLENGE` |
+  `error: <message>` | `still on login page` | `no login form found`. Handles
+  single-step (most sites) and multi-step (Google/Microsoft/banks: username,
+  then Next, then password) under one call. Detects OAuth/SSO buttons and
+  reports them instead of auto-clicking. Verifies the resulting state, not the
+  return status, so a silent failure is reported, not hidden.
+- Cookie/consent banner auto-dismiss on every navigate. A high-confidence scan
+  (OneTrust/Didomi/Quantcast/TrustArc/Cookiebot plus cookie-context scoring,
+  reject preferred over accept) dismisses the banner; the orientation surfaces
+  `consent: rejected cookies (onetrust)`. `--no-cookie-dismiss` disables. On by
+  default, high-confidence only, so a real dialog is never dismissed.
+- Custom combobox open-select. `act value=X` on a button+listbox dropdown
+  (`aria-haspopup="listbox"`, the W3C pattern a native `<select>` can't express)
+  opens the popup and clicks the matching `role=option`. A combobox whose
+  accessible name is empty but whose value carries its label (Chrome's
+  button-combobox quirk) is now addressable by intent.
+- Stealth hardening for 2026 vectors: permission-API consistency
+  (`Notification.permission='default'` paired with `permissions.query`
+  returning `'prompt'`), nonzero `outerWidth/Height` (a headless=0 tell), and
+  `navigator.connection` (undefined-in-headless tell).
 
 ### Verification
 
-- `TestLoginSaucedemo` (REAL saucedemo): `login standard_user/secret_sauce` -> `logged in` + `/inventory.html`.
-- `TestLoginWrongPassword` (REAL saucedemo, wrong creds): `error: do not match` (not a silent 'logged in').
-- `TestLoginMultiStepLocal` (2-step fixture: username -> Next -> password -> Sign in): `logged in`.
-- `TestLoginMultiStepWrong`: `error: Wrong password`.
-- `TestCookieDismissLocal` (OneTrust-style banner): `consent: rejected cookies (onetrust)`; banner gone from refs + text.
-- `TestCookieDismissDisabled` (--no-cookie-dismiss): banner left intact.
-- `TestComboboxOpenSelectLocal` (W3C button+listbox): `act value=Japan` -> option selected (read back from the page's span, not the return).
-- `TestStealthHardening` (real example.com): notif=default, perm=prompt, outerW=1366, conn=4g, webdriver=false.
-- Full live suite green (398s, 0 failures). `govulncheck` 0 reachable.
+Real-site tests: `TestLoginSaucedemo` logs in to `/inventory.html`;
+`TestLoginWrongPassword` returns `error: do not match` (not a silent success);
+`TestLoginMultiStepLocal` completes a 2-step fixture; `TestCookieDismissLocal`
+clears a OneTrust-style banner; `TestComboboxOpenSelectLocal` selects from a
+W3C button+listbox; `TestStealthHardening` passes the example.com probes. Full
+live suite green (398s, 0 failures). `govulncheck` 0 reachable.
 
-## v3.1.0 - 2026-06-27 (reliability + targeting: no empty refs, precise intent)
+## [3.1.0] - 2026-06-27
 
-A reliability + targeting pass prompted by a live opencode head-to-head report:
-`see refs` came back empty on the first call (needed a retry) and intent targeting
-landed on the wrong element, forcing a CSS-selector fallback. Both fixed at the
-root, plus a stronger `js` helper API.
+Reliability and targeting pass from a live opencode head-to-head: `see refs`
+came back empty on the first call (needed a retry) and intent targeting forced a
+CSS-selector fallback. Both fixed at the root.
 
-- **No more empty `see refs`.** `pullAXLocked` now waits for
+### Fixed
+
+- No more empty `see refs`. `pullAXLocked` now waits for
   `document.readyState === 'complete'` (bounded, non-fatal) before the AX
-  signature poll, so a heavy page (Wikipedia, SPAs) can't settle on a
-  stable-but-incomplete skeleton and hand back a near-empty tree. `buildTree`
-  also retries once on an empty tree, and `see`/`find` self-heal: if the cached
-  tree is thin they re-pull before rendering. The opencode "see refs returned
-  empty, needed retry" failure is gone (150 ref-lines on the first call on
-  Wikipedia).
-- **Precise intent targeting (no selector fallback).** `value=` is for
-  fillable/combobox only (the `act` contract), so intent resolution now
-  restricts to fillable/combobox when a value is supplied - an exact-named
-  clickable (Wikipedia's "Search" button) can no longer outrank the search
-  input. The DOM-attribute fallback got the same role-aware filter + scoring.
-  `act "Search" value="Machine learning"` now fills the search box directly.
-- **`js` helpers: `prop(x,name)`, `form(sel)`, `meta(name)`** added (element
-  property, form serialization, <meta> content) for stronger scraping.
+  signature poll, so a heavy page can't settle on a stable-but-incomplete
+  skeleton. `buildTree` retries once on an empty tree, and `see`/`find` self-heal
+  (re-pull if the cached tree is thin). 150 ref-lines on the first call on
+  Wikipedia, where it was empty before.
+- Precise intent targeting. `value=` is for fillable/combobox only (the `act`
+  contract), so intent resolution now restricts to fillable/combobox when a
+  value is supplied. An exact-named clickable (Wikipedia's "Search" button) can
+  no longer outrank the search input. The DOM-attribute fallback got the same
+  role-aware filter and scoring.
 
-### Verification
+### Added
 
-- New `TestV3WikipediaSearchNoRetry` (live) reproduces the opencode task: nav
-  Wikipedia -> `see refs` 150 lines on the first call -> `act "Search"
-  value="Machine learning"` fills the input by intent (no selector) -> Enter
-  navigates to /wiki/Machine_learning. No retry needed.
-- New unit tests: `TestResolveIntentValueExcludesClickable` +
-  `TestResolveIntentNoValuePrefersClickableButton` pin the targeting fix.
-- Full live suite green (~257s, 0 failures); go build/vet/gofmt clean.
+- `js` helpers: `prop(x,name)` (element property), `form(sel)` (serialize a form
+  to `{name: value}`), `meta(name)` (`<meta>` content by name/property).
 
-## v3.0.0 - 2026-06-27 (the rewrite: 22 tools -> 8 god-tier tools, `js` helper API, `nav` orientation, `see outline`)
+## [3.0.0] - 2026-06-27
 
-A ground-up rebuild of the tool surface for the agent that uses it. v2 grew to
-22 tools and the agent danced between `see`/`extract`/`read`/`find`/`eval`
-guessing selectors. v3 collapses them into 8 composable tools an agent masters
-from the defs alone, with a first-class JS extraction path so getting data is
-one call, not a ping-pong. The battle-tested chromedp engine (lazy launch,
-per-op timeout, dead-session tracking, stable backend-keyed refs, AX pull +
-iframe merge, verdicts/deltas, stealth) is retained unchanged - v3 is the
-surface + cognition ergonomics.
+Ground-up rebuild of the tool surface for the agent that uses it. v2 grew to 22
+tools and the agent danced between `see`/`extract`/`read`/`find`/`eval` guessing
+selectors. v3 collapses them into 8 composable tools an agent masters from the
+defs alone, with a first-class JS extraction path so getting data is one call,
+not a ping-pong. The chromedp engine (lazy launch, per-op timeout, dead-session
+tracking, stable backend-keyed refs, AX pull + iframe merge, verdicts/deltas,
+stealth) is retained unchanged.
 
-- **8 tools**: `nav`, `see`, `act`, `js`, `find`, `tabs`, `history`, `session`
-  (was 22). Connect cost drops from ~3,750 tok to ~1,900 tok.
-- **`js` - the structured-data hero.** Run JS with an injected helper API (`$`,
+### Changed
+
+- 22 tools to 8: `nav`, `see`, `act`, `js`, `find`, `tabs`, `history`,
+  `session`. Connect cost drops from ~3,750 to ~1,900 tokens.
+- Module path bumped `/v2` to `/v3` (Go major-version requirement).
+
+### Added
+
+- `js` as the structured-data hero. Run JS with an injected helper API (`$`,
   `$$`, `text`, `attr`, `html`, `visible`, `data`, `table`, `links`, `rect`,
   `xpath`, `frame`, `wait`) and get clean JSON back. `await="sel"` waits first.
-  A thrown error is surfaced with the page-side message. Robust to both
-  expression and statement-body scripts (auto-retry on SyntaxError). Replaces
-  `eval` + `extract` + `collect`. The GitHub 6-field scrape is `nav` + one `js`
-  call.
-- **`nav` returns an orientation.** Navigate and land with page type + auth +
-  the top primary actions WITH refs + regions + counts - act immediately, no
-  separate `see`. `back`/`forward`/`reload`; `newTab=true`.
-- **`act` is any single action.** Name a control (intent) or give a ref/selector;
-  act clicks/fills/selects by role+value, or `hover=true`, `key=Enter`,
-  `files=[..]`. Optional `waitUrl=/waitText=/waitGone=` fuses a wait in. Fuses
-  v2's act/click/fill/select/hover/press_key/upload/wait.
-- **`see level=outline`** - the semantic skeleton (headings/tables/lists/forms/
-  regions) each with a WORKING css selector, so scraping starts from the right
-  selectors instead of guessing. Plus brief/refs/text/full/shot.
-- **`find` bridges refs and selectors.** By role/text -> refs; by `selector=` ->
-  `[css]` matches; `selectors=true` also gives a css selector per a11y match.
-- **`session mode=reset|clear`** fuses v2's reset + clear.
+  Auto-detects expression vs statement-body scripts (SyntaxError retry).
+  Replaces `eval` + `extract` + `collect`.
+- `nav` returns an orientation: page type, auth state, top primary actions with
+  refs, regions, counts. `back`/`forward`/`reload`, `newTab=true`.
+- `see level=outline`: the semantic skeleton (headings/tables/lists/forms/
+  regions) each with a working CSS selector, so scraping starts from the right
+  selectors instead of guessing.
+- `find` bridges refs and selectors: by role/text to refs, by `selector=` to
+  matches, `selectors=true` for both.
+- `act` unifies click/fill/select/hover/press/upload/wait into one call with
+  optional `waitUrl=/waitText=/waitGone=`. Ambiguous matches return ranked
+  candidates; disambiguate with `nth` or `role`.
+- `session mode=reset|clear` fuses v2's reset + clear.
 
-### Verification
+## [2.4.0] - 2026-06-27
 
-- 25 live integration tests (gated `AGENT_BROWSER_INTEGRATION=1`) green against
-  example.com, saucedemo.com, and the-internet.herokuapp.com: nav orientation,
-  nav level=refs, js expression/object/links/await/error-capture, see
-  brief/refs/text/outline, find a11y/selector/selectors-bridge, act by
-  intent/ref/selector, ambiguous candidates, nth, hover (reveals caption), key
-  press (registers), upload (File Uploaded!), tabs new/switch/close, history,
-  session clear (drops login) + reset, act-needs-target error. Full suite
-  ~269s, 0 failures.
-- Unit tests green: navLevel, verbLabel, deltaOut (navigated/soft-fail/nil),
-  returnRe (expression vs body detection), parseErrObject (error vs data).
-- `go build`/`go vet`/`gofmt` clean; `govulncheck` 0 reachable.
-- Module path bumped `/v2` -> `/v3` (Go major-version requirement).
+Token and call efficiency for real agent workflows.
+
+### Added
+
+- `collect` tool: pass `fields={label:selector}`, get `{label: value}` JSON in
+  one call. `attrs={label:attrName}` pulls an attribute instead of text. A
+  missing selector returns `null` for that label (a partial result, not an
+  error). Tool count 20 to 22.
+- `clear` tool: one-call clean slate. Wipes cookies + the current origin's
+  localStorage/sessionStorage and reloads (or opens a url).
+
+### Changed
+
+- `extract` now targets a region: `selector=` scopes table/links/list/article;
+  new `text` kind returns each match's text as a JSON array; `maxChars=` caps
+  the response.
+- `select` takes a `selector`, bringing it to parity with click/fill/act for
+  unlabeled dropdowns.
+- `fill` description leads with the batched form path (`fields={ref: value}` in
+  one call). `eval` description reframed as the go-to for scattered scalars.
+
+## [2.2.2] - 2026-06-25
+
+### Added
+
+- Idle auto-close. A background reaper tears Chrome down after `--idle-timeout`
+  (default 10m) of no browser activity; the next navigate re-launches it
+  seamlessly. `--idle-timeout 0` disables. The reaper polls at idleTimeout/4
+  (clamped 5-60s), only acts when the browser is up and genuinely idle, and
+  never races an in-flight op (it takes the session lock).
+
+## [2.2.1] - 2026-06-25
+
+### Changed
+
+- Lazy browser launch. `New()` only constructs the session; Chrome spawns on the
+  first page-opening op (navigate / new tab / back-forward-reload). Read-only
+  ops called before the first navigate report "no page snapshot yet; call
+  navigate first" and do not spawn Chrome. `Close()` is a no-op if the browser
+  was never launched.
 
-## v2.4.0 - 2026-06-27 (agent-efficiency: targeted extract, collect, clean slate, select-by-selector, batched fill)
+## [2.2.0] - 2026-06-23
+
+A live head-to-head vs charlotte surfaced three improvements.
+
+### Added
+
+- `nth` from the end for `act`/`find`: `nth=-1` is last match, `-2` second-last
+  (wraps so `nth=-N` is first).
+- CSS-selector escape hatch for `find`, `click`, `fill`, `act`: reaches elements
+  the a11y tree drops (custom `div[role=widget]`, presentational spans with
+  handlers) via the same verdict + delta path.
+
+### Fixed
+
+- Sharper verdict on URL-stable reorders. A click that reorders the same DOM
+  nodes (a sort, a filter, an SPA re-render) left the element diff empty, so the
+  verdict read "no visible effect". An order-sensitive content signature now
+  yields "page updated (URL stable; e.g. sort/filter/SPA re-render)". Element
+  changes still win when present.
+
+## [2.1.1] - 2026-06-23
+
+### Changed
+
+- Decorative-junk filter: drops interactive elements that are unnamed AND not
+  focusable (decorative `div[role=button]`, ad slots, `span[role=button]` with
+  no handler). Named widgets and focusable native controls are kept. Uses
+  `PropertyNameFocusable` from the a11y tree.
+- `bench/aria_mess`: the ugly-end benchmark. Runs the snapshot against 11
+  synthetic pages modeling the worst real ARIA pathologies and reports per page
+  tokens, refs, named refs, non-focusable refs, landmarks.
+
+## [2.1.0] - 2026-06-23
+
+### Changed
 
-A pass on token + call efficiency for real agent workflows. Five changes:
+- Stable, backend-keyed refs. Refs are assigned from a per-tab
+  `backendNodeID -> ref` map with a monotonic counter, instead of positional
+  `r{index}`. A ref the agent holds stays valid across re-renders; the map is
+  cleared on navigation so a stale ref can't retarget to a different control.
+  `reset` zeroes the counter for a fresh start.
+- Delta is sharper: `Changed` elements keep their ref; `Added` get fresh refs;
+  `Removed` carry the old (now invalid) ref so the breakage is explicit.
 
-- **New `collect` tool.** Pass `fields={label:selector}`, get `{label:value}` JSON in one call - the multi-value pull without writing JS. Get a repo's stars + language + issues + latest release, or an article's title + first paragraph + infobox, in one call. `attrs={label:attrName}` pulls an attribute instead of text (e.g. a link's href). A selector that doesn't match returns `null` for that label (a partial result you can branch on, not an error). One call replaces N `extract` calls or a custom `eval`. Tool count 20 -> 22.
-- **`extract` now targets a region.** `selector=` scopes table/links/list/article to a CSS-matched element; a new `text` kind returns each matched element's text as a JSON array (the targeted value pull, no JS); `maxChars=` caps the response. `extract article selector="#firstHeading"` returns just the heading instead of the whole `<main>`.
-- **New `clear` tool - one-call clean slate.** Wipes cookies + the current origin's localStorage/sessionStorage and reloads (or opens a url), instead of removing leftover state item by item.
-- **`select` now takes a `selector`.** Brings select to parity with click/fill/act (all already had a selector escape hatch) - the path for unlabeled dropdowns the a11y tree has no name for (a sort `<select>` with only a class).
-- **`fill` description flipped** to lead with the batched form path (`fields={ref:value}` in one call) - the efficient default for a form. **`eval` description reframed** as the go-to for scattered scalars (return several fields as one object).
+### Added
 
-### Verification
-
-- `TestRealWorldCollect` / `CollectMiss` / `CollectRequiresFields` / `CollectFormFlow` (live): one-call multi-value pull returns `{label:value}` JSON; `attrs` returns an attribute (a link's absolute href); a missing selector yields `null` (not an error); empty `fields` is an isError; a batched `fill fields={}` + `act "Login"` reaches the inventory.
-- `TestRealWorldExtractSelectorScope` / `ExtractText` / `ExtractTextRequiresSelector` / `ExtractMaxChars` / `ExtractSelectorMiss` (live): selector scoping shrinks output, `text` returns a JSON array of matches, `text` without a selector is an isError, `maxChars` caps + marks truncated, a non-matching selector is an isError with a pointer.
-- `TestRealWorldSelectSelector` (live): `select selector=".product_sort_container" value="Price (high to low)"` applies the sort - the priciest item lands before the cheapest in the inventory.
-- `TestRealWorldClear` / `ClearNavigate` (live): after login, `clear` wipes the session - saucedemo redirects to the login page; `clear url=` lands on the new page.
-- Full live suite green (1063s, 0 failures). `go build`/`go vet`/`gofmt` clean; `govulncheck` 0 reachable.
-
-## v2.2.2 - 2026-06-25 (idle auto-close - Chrome tears down when not in use)
-
-v2.2.1 stopped Chrome spawning on startup, but once you navigated once, Chrome stayed alive for the whole MCP session - so a one-shot browser use left Chrome running for the rest of the chat. v2.2.2 adds an **idle auto-close**: a background reaper tears Chrome down after `--idle-timeout` (default **10m**) of no browser activity. The next navigate re-launches it seamlessly via the lazy-launch path (page state is lost - a fresh tab - so the agent re-navigates; read-only ops before that report "no page snapshot yet; call navigate first"). `--idle-timeout 0` disables it. The reaper polls at idleTimeout/4 (clamped 5-60s), only acts when the browser is actually up + genuinely idle, and never races an in-flight op (it takes the session lock, so it can only tear down between ops). Browser-touching ops reset the idle timer via `touchLocked` (in `curTabLocked` + `ensureBrowserLocked`); pure context ops (`history` with no browser use) don't keep Chrome alive.
-
-### Verification
-
-- `TestIdleAutoClose` (live, 6s test timeout): Chrome launches on navigate, **auto-closes after ~6s idle** (0 debug-chrome processes), `where` reports "no page snapshot yet", the next navigate **re-launches** Chrome + the page is reachable.
-- Full live suite green (743s, 0 failures) - the `touchLocked` in the hot path + the background reaper regress nothing (the 10m default never fires during the suite's frequent ops). `govulncheck` 0 reachable.
-
-## v2.2.1 - 2026-06-25 (lazy browser launch - no Chrome on startup)
-
-The MCP server used to launch Chrome the moment it started (`browser.New` ran `launchBrowserLocked` eagerly), so a Chrome process spawned as soon as your agent client connected - even before any tool was called. If you connected the server but never drove it, Chrome sat idle eating resources. v2.2.1 makes the launch **lazy**: `New()` only constructs the session; Chrome spawns on the first **page-opening** op (navigate / new tab / back-forward-reload) via a new `ensureBrowserLocked`. Read-only ops called before the first navigate (`where`, `find`, `see`, `read`, ...) report "no page snapshot yet; call navigate first" and do NOT spawn Chrome. The persistent->temp profile fallback + the dead-session guard carry over unchanged. `Close()` is a no-op if the browser was never launched (no orphan process).
-
-### Verification
-
-- `TestLazyBrowserLaunch` (live): right after server connect, **0** debug-Chrome processes (no eager launch); `where`/`find` before navigate return "no page snapshot yet" without launching; the first navigate launches Chrome + the page is reachable.
-- Full live suite green (858s, 0 failures) - no regression: every op that needs a page still gets it (navigate/new-tab/back-forward-reload call `ensureBrowserLocked`; actions run against the cached tab and naturally error "no snapshot" if called before navigate). `govulncheck` 0 reachable.
-
-## v2.2.0 - 2026-06-23 (reliability + optimization: sharper verdicts, nth-from-end, CSS-selector escape hatch)
-
-A live head-to-head vs charlotte (the closest direct competitor - same token-efficient, AX-tree-first thesis) surfaced three concrete improvements. This release ships all three, verified against a clean re-run of the charlotte comparison.
-
-### Sharper verdict on URL-stable reorders (the sort/SPA complaint)
-
-A click that reorders the SAME DOM nodes (a product sort, a filter, an SPA re-render) leaves the backend-id set unchanged, so the element diff saw no add/remove/changed and the verdict read "no visible effect" - misleading on a sort that clearly happened. v2.2 adds an order-sensitive content signature (FNV-1a over the kept elements' role+name+value) to each tree; `Diff` sets `ContentChanged` when the signature shifts but no element was added/removed, and `InferVerdict` now returns **"page updated (URL stable; e.g. sort/filter/SPA re-render) - call see to refresh refs"** instead of "no visible effect". Element-level changes still win when present (signature is the fallback, not an override). The signature ignores refs, so a re-snapshot of an unchanged page never false-positives.
-
-### `nth` from the end (the identical-buttons complaint)
-
-`act`/`find` disambiguation was 1-based from the top only. On N identical "Add to cart" buttons you had to know N to pick the last. v2.2 accepts negatives: `nth=-1` = last match, `-2` = second-last (wraps so `nth=-N` = first). The saucedemo "add the priciest after a price sort" case is now `act "Add to cart" nth=-1` with no counting.
-
-### CSS-selector escape hatch (closes charlotte's one real edge)
-
-The one place a pure a11y-tree tool loses to a CSS-selector tool: elements the a11y tree drops (custom `div[role=widget]`, presentational `span`s with handlers, shadow-exposed controls). v2.2 adds a `selector` param to `find`, `click`, `fill`, and `act`:
-- `find selector=".btn-x"` runs `querySelectorAll` and returns `[css]` lines with a `sel=` you pass back.
-- `click`/`fill`/`act selector="..."` acts directly on `querySelector(sel)`, reusing the existing real-mouse click + native-value-setter fill machinery (same React/Vue reliability as the ref path). `act selector` auto-detects tag/type (click buttons/links, fill text inputs, select `<select>`).
-
-This reaches off-tree widgets without adding a parallel action surface - the same verdict + delta path, just a different resolver.
-
-### Verification
-
-- `TestInferVerdictContentChangedReorder` / `TestInferVerdictNoChangeNoSignature` / `TestInferVerdictChangedBeatsContentChanged` / `TestSignatureStableAcrossRefReassign` (unit): the signature detects a pure reorder, ignores identical content, yields to element-level changes, and is ref-independent.
-- `TestResolveIntentNthNegative` (unit): nth=-1 last, -2 second-last, -N wraps to first, out-of-range errors.
-- `TestSelectorEscapeHatch` + `TestVerdictSortReorder` (live, hermetic data-URL pages): the off-tree span is unreachable by a11y find but reachable + clickable/fillable via selector; a real reorder verdict says "page updated" not "no visible effect".
-- Full live suite green (651s, 0 failures). `govulncheck` 0 reachable.
-
-### charlotte vs agent-browser (the live comparison, corrected)
-
-A live head-to-head (8 scenarios: HN orientation, saucedemo login, saucedemo multi-step purchase, Wikipedia search+extract, dense find, read content, dynamic/wait, agent-friendliness) confirmed the v2.1 findings and corrected two errors in the initial report:
-- **Corrected:** agent-browser DOES ship tab management (`tabs`) and screenshots (`screenshot`) - the initial report wrongly credited these to charlotte alone. charlotte's real exclusive edges shrink to: structural `diff`, session/cookie management, and drag-and-drop.
-- **Confirmed (re-verified cleanly):** charlotte's click on saucedemo's React "Add to cart" buttons returns success but has NO effect - a fresh navigation to `/cart.html` after the click shows an empty cart. This is a silent failure (the agent thinks it worked), worse than an error. agent-browser's real-mouse + synthetic `click()` fires the handler reliably.
-- **Now closed by v2.2:** charlotte's CSS-selector `find` edge (the selector escape hatch) and the agent-browser "no visible effect on sort" waffle (the content signature).
-
-The full corrected report ships at `charlotte-vs-agent-browser-report.md`.
-
-## v2.1.1 - 2026-06-23 (ugly-ARIA whitelist hardening + the ugly-end benchmark)
-
-A reviewer pointed out the role whitelist is only as clean as the page's ARIA: on a messy SPA, decorative `div[role=button]` ads, `span[role=button]` with no handler, and other junk that used to live in dead markup moves UP into the semantic tree, where a static whitelist can't tell a meaningful control from a mislabeled one. This release adds a principled filter for the detectable junk, a benchmark that runs the snapshot against the ugly end, and the honest numbers.
-
-### Decorative-junk filter (the headline)
-
-- **Drop interactive elements that are unnamed AND not focusable.** A native `<button>`/`<a>`/`<input>` is always focusable, so real icon-only buttons and unlabeled inputs stay (the latter is what the `act` DOM fallback targets). A named custom widget stays even if unfocusable. Only an interactive role on an element with NO accessible name AND NO focus (a decorative `div[role=button]` / ad slot / `span[role=button]` with no handler) is dropped - the agent can't address it by intent (no name) and clicking it by ref would be a guess at a probably-decorative node.
-- **What it does NOT drop (honest limit):** named junk stays. A `span[role=button]` with `aria-label="x"`, or ten buttons all labeled "Click here", are kept - a name is a name, and judging name quality / disambiguating duplicates is the agent's job, not the whitelist's. The filter targets the detectable decorative layer, not mislabeled-but-named controls.
-- `PropertyNameFocusable` from the a11y tree is the signal.
-
-### `bench/aria_mess` - the ugly-end benchmark
-
-- Runs the snapshot against 11 synthetic pages that model the worst real ARIA pathologies (generic soup, decorative role=button, duplicate main, mislabeled controls, nameless icon buttons, link soup, landmark soup, ad-slot divs, a composite messy SPA) and reports per page: tokens, total refs, named refs, non-focusable refs, landmarks, duplicate main.
-- Reproducible (synthetic pathologies, local fixtures). See `bench/aria_mess/README.md`.
-
-### Measured (before -> after the filter)
-
-| page | refs before | refs after | tokens before | tokens after |
-|---|---|---|---|---|
-| decorative-role-button | 8 | 3 | 31 | 15 |
-| ad-slot-divs | 9 | 1 | 35 | 7 |
-| messy-spa (composite) | 36 | 30 | 186 | 165 |
-| generic-soup | 3 | 3 | 15 | 15 (already clean) |
-| nameless-icon-buttons (real) | 8 | 8 | 33 | 33 (native buttons, focusable, kept) |
-
-The filter removes the decorative junk the reviewer named; real icon-only buttons + unlabeled inputs + named custom widgets are preserved.
-
-### Verification
-
-- `TestBuildTreeDropsDecorativeUnfocused` (unit): drops unnamed+unfocusable, keeps named+unfocusable, keeps unnamed+focusable, keeps unlabeled inputs.
-- Full live suite green (636s, 0 failures) - the filter drops no real control on real sites (Saucedemo, HN, Wikipedia, go.dev). `govulncheck` 0 reachable.
-
-## v2.1.0 - 2026-06-23 (stable refs + task-success-per-token benchmark)
-
-Refs were positional (r1..rN in tree order), reassigned on every snapshot. A page re-render that shifted tree order silently retargeted an old ref to a DIFFERENT control - the agent clicks the wrong element three steps ago and never knows. This release makes refs stable, adds a task-success-per-token benchmark (the honest metric, vs the snapshot-size table), and verifies both.
-
-### Stable, backend-keyed refs (the headline reliability fix)
-
-- **Same DOM node keeps the same ref across re-renders.** Refs are now assigned from a per-tab `backendNodeID -> ref` map with a monotonic counter (`snapshot.Tree.AssignRefs`), instead of positional `r{index}`. A ref the agent holds from a previous snapshot still points to the right element after the page mutates - eliminating the positional-collision failure where `r5` silently retargets to a different control after a re-render shifts tree order.
-- **No stale-ref collision across navigation.** The ref map is cleared on navigation (a new document assigns fresh backend ids), but the counter stays monotonic, so a stale ref from an earlier page (a lower number) can't be reused for a different element on the new page. A confused agent holding an old ref gets a clean `ref not found; call see` instead of acting on the wrong control.
-- **`reset` is a clean slate.** Reset zeroes the counter (the tool tells the agent all refs are reset + returns a fresh orientation), so post-reset refs restart low. Normal navigation keeps the counter monotonic (the bulletproof path); reset is the explicit fresh-start escape hatch.
-- **Delta is sharper.** `Changed` elements keep their ref (same node, name/value differs), so a ref the agent holds for a changed control is still valid. `Added` get fresh refs; `Removed` carry the old ref (now invalid) so the breakage is explicit.
-- Proven live: `TestStableRefsAcrossReRender` (a re-render that prepends an element before existing ones - old refs stay stable, the new one gets a fresh ref, and reading the old ref still hits the original control, not the newly-prepended one) + unit `TestAssignRefsStable`. Negative-verified: disabling `AssignRefs` makes the live test fail with the exact silent-retarget symptom (`ref r3 text: Item 3 (new)` instead of `Item 1`).
-
-### Task-success-per-token benchmark (`bench/successtoken`)
-
-- A new harness runs 5 multi-step tasks (login, search+extract, form fill+select+submit, multi-page nav, lazy-list scroll) on local fixtures against agent-browser AND `@playwright/mcp` head-to-head, measuring task success + total tool-I/O tokens (sent args + returned text, /4). The "agent" is a deterministic scripted policy so the comparison is fair + reproducible (token cost is the tool surface, independent of the LLM).
-- Result (2026-06-23): both tools 5/5 (100%) success; **agent-browser 1142 tokens vs playwright-mcp 2337 tokens** (~2.05x fewer tokens at equal success). The win is intent-first `act` (resolve + act + verdict in one call, no per-action snapshot) + dense read/delta output vs the snapshot-type-snapshot pattern + verbose YAML snapshot. See `bench/successtoken/README.md`.
-
-### Verification
-
-- Full live suite green (zero failures); unit tests green; `govulncheck` 0 reachable; `go vet` + `go build ./...` clean (including the new bench package).
-- Benchmark reproducible (identical char counts across two runs - deterministic scripts).
-
-## v2.0.9 - 2026-06-22 (flawless act + hardened click + agent QoL)
-
-A live-agent test (opencode) found `act` timing out on certain form layouts and `click` timing out enough to need `reset`. This release makes `act` flawless on poorly-labeled forms, hardens every action against wedging pages, fixes a latent `navigate back/forward/reload` hang, and adds agent QoL across the tool surface. 12 new live regression tests (gated by `AGENT_BROWSER_INTEGRATION=1`); full live suite green; `govulncheck` 0 reachable.
-
-### `act` flawless (the headline)
-
-- **DOM-attribute fallback.** `act` matched only the a11y name (what Chrome's AX tree computed from the label/placeholder/aria-label). An input with NO a11y name (no `<label>`, no placeholder, no aria-label - only a `name=`/`id=` the agent knows from HTML or `extract form`) was unreachable by intent. `act` now falls back to a DOM scan over `name`/`id`/`placeholder`/`title`/`aria-label` (and button/link text) on no a11y match - one extra CDP round-trip, only on no-match (the hot path is unchanged). Reproduced + fixed: `act "custcode"` on a name-only input now resolves `[dom] textbox "custcode" (fill)`.
-- **Combobox with no value** now errors clearly ("pass a value to select an option") instead of clicking the dropdown open.
-
-### Action hardening (the `click` wedge fix)
-
-- **Soft-fail post-action re-snapshot.** A click/fill/`act` that fires but lands on a hanging navigation used to spend ~16s (8s AX-pull x 2 with retry) then return an `isError` that read like the click failed. The re-snapshot now does ONE pull (<=8s) and, on failure, returns a SOFT verdict ("action fired; page is loading or unreachable - call see to refresh refs") - the action succeeded; the agent re-sees for fresh refs. Reproduced: a click into a never-responding endpoint now returns in ~8s as a soft verdict (was 16.9s `isError`), and the session stays usable (a fresh navigate works immediately, no `reset` needed).
-- **`navigate back/forward/reload` fixed (latent bug).** `chromedp.WaitReady("body")` after a JS-triggered `history.back()/forward()/location.reload()` hangs on a stale execution context (bfcache-cached pages don't fire the document-updated event chromedp tracks). Replaced with a `readyState` + `document.body` JS poll that re-resolves the target's context each call. This was failing reliably (30s timeout) on both local servers and real sites; now ~10-20s and correct.
-- **`isFatalBrowserErr` hardened.** "context canceled" is now only fatal when the browser session ctx itself is done, not when a single tab's ctx is cancelled (a tab close/reset, a mid-nav context tear-down). The old classification could mark a healthy browser dead + force a needless `reset`. This is also what lets the back/forward poll survive a transient mid-nav context error.
-
-### Correctness
-
-- **`select` errors on a no-match option** instead of silently no-op'ing (the old `selectJS` returned the old value with no error; the agent couldn't tell the option wasn't found).
-- **Failed actions are recorded in `history`.** `history errors=true` now shows blocked (CHALLENGE) and failed (`error:`) actions - a click that timed out, an `act` that found nothing, a fill that threw - not just CHALLENGE verdicts.
-
-### Less-destructive `reset`
-
-- `reset` no longer always relaunches the whole browser. If the browser is alive (the common case: a tool timed out, an SPA is unresponsive), it re-navigates the CURRENT tab to a fresh page (`url`, or `about:blank`) and KEEPS your other tabs + their logins. It only does a full Chrome relaunch (other tabs lost) when the browser is actually dead. Best of the v2.0.1 new-tab swap + the v2.0.2 full-relaunch recovery.
-
-### Agent QoL
-
-- **`press_key` optional `ref`**: focus a specific element first, so `press_key Enter ref=r3` submits that input's form without a separate click/fill.
-- **`wait` default seconds**: `wait url=/dashboard` with `seconds=0` defaults to 10s instead of an instant timeout (a common agent slip).
-- **`eval` unquotes string results** (`document.title` -> `Title`, not `"Title"`) and now serializes object results to JSON (objects previously returned empty, by reference).
-- **`where` shows the current tab** (id + label + tab count) for multi-tab orientation.
-
-### Hygiene
-
-- Fixed a comment typo in the `dead`-field doc (a literal `\t//` baked into the comment text).
-
-## v2.0.3 - 2026-06-21 (reliability: the NewTab fix)
-
-v2.0.2 fixed the locked-profile crash, but a live opencode test then surfaced that **`tabs new` crashed the session** ("chrome failed to start"). Root cause: the v2.0.1 first-tab change made the first tab `NewContext(browserCtx)`, so chromedp set the `Browser` on the *first tab's* context, not on `browserCtx`. `NewTab` derived new tabs from `s.browserCtx` (whose `Browser` was nil), so chromedp thought each new tab was the "first" context and **launched a second Chrome** - which failed on the locked persistent profile.
-
-### The fix
-
-- **`NewTab` derives new tabs from an existing tab's context** (which carries the allocated `Browser`), not from `s.browserCtx`. So `NewContext` creates a new target on the existing browser instead of launching a second Chrome. One-line root-cause fix for the opencode "tabs new crashed" report.
-
-### Tests
-
-- New live test `TestReliabilityNewTabSameBrowser`: use a dedicated `--user-data-dir` (so the first Chrome locks it), then `tabs new` - a buggy NewTab launching a second Chrome on the locked dir fails with "chrome failed to start"; the fix opens a tab on the same browser. Negative-verified: reverting the fix makes the test fail with the exact opencode symptom.
-- Full live suite re-verified green (reliability + act/verdict/brief/history/qol). `govulncheck`: 0 reachable.
-
-## v2.0.2 - 2026-06-21 (reliability: the server-crash fix)
-
-v2.0.1 bounded operations + added reset, but a live test on opencode surfaced a deeper bug: when the **persistent profile** (`<os config dir>/agent-browser`) is locked by an orphaned Chrome from a prior run, Chrome fails to start, and chromedp then **panics** (`close of closed channel` in `ExecAllocator.Allocate`) on the next op's retry - crashing the whole MCP server. Every tool then times out (the server is dead). This release makes launch + recovery bulletproof.
-
-### The crash + the fix
-
-- **Persistent -> temp profile fallback**: if Chrome can't start with the requested persistent profile (locked by an orphan, corrupted, or any launch error - "chrome failed to start", "websocket url timeout reached", ...), `New` tears that attempt down + relaunches with a throwaway temp profile so the server still works (no persistence, but alive). A stderr log line tells the operator persistence is off + how to restore it (kill leftover agent-browser Chrome processes). Without this, a locked profile made every tool fail.
-- **Dead-session guard (the chromedp panic fix)**: a fatal browser error (chrome failed to start, the process crashed, the websocket dropped) now marks the session `dead`. `run`/`runTimeout` short-circuit on a dead session - they return the error WITHOUT calling `chromedp.Run`, so a dead browser is never retried. The panic was chromedp double-closing `c.allocated` when a second `Run` retried `Allocate` after the first failed; never retrying = no double-close = no crash.
-- **`reset` is now a full browser relaunch** (not just a new tab): it tears down the whole browser + relaunches Chrome, so it recovers from a wedged TAB and from a crashed BROWSER (a new-tab reset can't - the dead session won't accept a new target). Other tabs are lost (acceptable for recovery). Bounded by the op timeout.
-- **Launch timeout is separate from the op timeout** (60s): the Chrome cold-start (the first CDP op) gets its own generous budget so a slow launch (antivirus, first-run profile setup, a heavy persistent profile) doesn't fail `New` under a tight `--op-timeout`.
-- **First-tab cancel no longer kills the browser** (from v2.0.1, retained): the first tab gets its own chromedp target, so `reset`/`close` on t1 closes only that tab.
-
-### Also in this release
-
-- The dialog auto-accept handler no longer goes through `run` (it ran in a listener goroutine without the session lock, which would have raced on the dead flag + could wrongly mark the session dead on a closing tab).
-
-### Tests
-
-- New live test `TestReliabilityProfileFallback`: launch the server with an invalid `--user-data-dir` (a file, not a dir) so Chrome can't start, assert the temp-profile fallback makes navigate succeed (pre-fix this crashed the server).
-- All v2.0.1 reliability tests re-verified green (op-timeout, reset, combobox, press_key, tab-switch) + the existing live suite (act login, verdict, qol back/forward). `govulncheck`: 0 reachable.
-
-## v2.0.1 - 2026-06-21 (reliability)
-
-v2.0.0 could wedge: a single hung CDP call (a page that never finishes loading, a mid-navigation execution-context teardown, a challenge that stalls) held the session mutex forever, and EVERY tool then blocked on the lock until the MCP client timed out - the "session hung, all tools timed out" failure. This release bounds every operation, fixes the correctness gaps a live agent test surfaced, and adds an explicit recovery path.
-
-### Reliability (the wedge fix)
-
-- **Per-operation timeout** (`--op-timeout`, default 30s): every CDP call is bounded. A hung page returns a timeout error + releases the session lock instead of wedging every tool. Implemented with a goroutine + select (not `context.WithTimeout`, which breaks `chromedp.Navigate`'s navigation listener with a spurious "context canceled"). A genuinely wedged op leaks a goroutine until the tab is reset/closed.
-- **`reset` tool**: the explicit recovery path the agent asked for ("no session management - no close/reset when it hangs"). Drops the current tab (cancelling any hung op on it) + opens a fresh one at an optional URL; other tabs are kept. Pairs with the op timeout - the timeout guarantees the lock is released, reset cleans up.
-- **First-tab cancel no longer kills the browser**: the first tab now gets its own chromedp target (like `new tab`), so `reset`/`close` on t1 closes only that tab. Previously t1's cancel was the browser cancel, so resetting or closing the first tab tore down the whole browser (then every later op errored "context canceled"). This also fixes a latent `close t1` bug.
-
-### Correctness fixes (from a live OpenCode agent test)
-
-- **`act` on an ARIA combobox** (Google search, autocomplete widgets): a `combobox` role over a `<textarea>` has no `<option>`s, so the old `selectJS` no-op'd on it and the agent had to fall back to `eval`. `act` now probes the tag - native `<select>` -> select the option; ARIA combobox (textarea/input) -> fill (the native value setter + input/change that React/Vue autocompletes actually listen for).
-- **`press_key` multi-char silent no-op**: `press_key key="weather in tokyo"` dispatched a useless keyDown with a multi-char key string (no native default, inserts nothing) and the agent couldn't tell. `press_key` now rejects anything that isn't a named key or a single character, with an error that redirects to `fill`/`act` for typing text.
-- **`tabs switch`/`close` by label**: the handler passed only `id` to `SwitchTab`/`CloseTab`, so `switch label=<name>` silently failed. Both now accept the `label` field as a fallback when `id` is empty.
-
-### Tests
-
-- 5 new live reliability tests (gated by `AGENT_BROWSER_INTEGRATION=1`): op-timeout bound fires + session not wedged after; `reset` drops + reopens a working tab; ARIA combobox is filled not selected; `press_key` rejects a multi-char key; `tabs switch`/`close` by label works.
-- New unit test `TestValidateKeyPress` (runs in CI): the press_key input rule without a browser.
-- Existing live suite re-verified green (act/verdict/brief/history/qol/scroll/extract/net) - no regression from the `run` wrapper or the first-tab change.
-- `govulncheck`: 0 reachable vulnerabilities.
-
-## Unreleased (v2.1, planned)
-
-- **intercept** (block/mock/redirect network rules): live use hits a chromedp Fetch-event concurrency deadlock when an action triggers a matching paused request; the fix path is a dedicated second target context for fetch responses.
-- **Credential vault**: encrypted per-site credential storage (OS keychain) so the agent can log in to a fresh site without hand-fed passwords. (v1.0's persistent profile already covers the common "stay logged in" case.)
-- **Per-ref region tags**: tag each ref with its landmark region (nav/main/sidebar/footer) via an AX-tree parent walk, so the agent can reason about layout ("the buy button is in main"). Deferred from v2.0 - needs a two-pass BuildTree; the brief's `regions:` line covers the layout shape for now.
-- **Stale-ref auto-recovery**: when a by-ref action targets a ref that's gone after a re-render, re-target to the closest live match by name/role and surface it. Deferred from v2.0 - needs a prevRefs map; the existing error names the next move ("refs may be stale - call see again").
-
-## v2.0.0 - 2026-06-21 (cognition layer)
-
-v1 made snapshots cheap (delta act-and-see). v2 makes the agent **think in goals, not refs**: the tool understands the page, acts on intent, and reports a verdict. The agent stops interpreting raw DOM and stops re-seeing to confirm. Additive - all v1 by-ref tools still work.
-
-### New tools (15 -> 18)
-
-`act` (intent-first), `extract` (structured data), `history` (session memory).
-
-### Headline: `act` + verdicts
-
-- **`act <intent>`**: pass a control's name (`act "Sign in"`, `act "Username" value=x`); local heuristics resolve it on the cached snapshot (no LLM, no per-call cost), perform the default action for its role (click buttons/links, fill textbox/searchbox, select combobox), return a verdict + delta. Collapses find + click/fill + see into one call. Ambiguous matches return ranked candidates (never guesses) - disambiguate with `nth`/`role` or fall back to `click`/`fill` by ref.
-- **Verdicts on every action** (click/fill/select/scroll/press_key/hover/act): a one-line semantic outcome - `navigated to ...`, `dialog opened: ...`, `status: ...`, `changed: +N -M ~K`, `no visible effect`, `CHALLENGE: ...`. For non-navigation actions it also folds in the XHR/Fetch responses that fired (`net: /api/cart 200`) via a read-only per-tab network listener (no Fetch-domain pausing, so no deadlock risk).
-
-### Cognition layer
-
-- **`see level=brief`**: a ~50-token page brief - page type (login form / list / article / dialog), auth state (logged in / anonymous / blocked), top primary actions with refs, regions, counts. Pure heuristics over the a11y tree.
-- **`extract`**: `table` (rows, JSON; objects if the first row is headers), `links` (`[{text,href}]`), `list`, `form` (`[{ref,role,name,value}]` from the cached tree), `article` (main content text). One targeted DOM eval for the DOM kinds; `form` is free.
-- **`history`**: a rolling action log (step / action / verdict / URL), capped at 200, queryable (`last=N`, `errors=true`), offloaded from the agent's context so long tasks don't bloat it. Step numbers stay monotonic across trims.
-
-### Extensions + polish
-
-- **`wait` gains semantic conditions**: `url=` (URL contains), `text=` (body contains), `gone=` (body no longer contains) - returns what satisfied it, or an error on timeout.
-- **`fill` gains a `{ref: value}` map**: fill a whole form in one call (one round-trip + one delta).
-- **Scroll awareness**: `scroll` reports the position (`more below` / `at bottom` / `fits viewport`) so the agent knows whether to keep scrolling.
-- **Challenge detection on every snapshot** (not just navigate): a click that lands on a Cloudflare wall reports `verdict: CHALLENGE: ...`.
-
-### Honest tradeoffs
-
-- **Cost to connect rose** ~1,150 tok (v1 ~2,363 -> v2 ~3,500) to fund 3 new tools + verdicts + richer descriptions. Roughly tied with Playwright MCP (~3,442 tok) and under Chrome DevTools MCP (~5,000 tok), but with 3 capabilities neither has. Per-task cost dropped ~2.6x vs v1 (~397 -> ~154 tok on a saucedemo login) and ~10x vs the competitors.
-- The intent resolver / verdict / extract heuristics are best-effort; `act` never guesses (returns candidates), `extract` says "no X found" when absent, `see level=summary` is always available for raw refs.
-- Speed is unchanged (same chromedp mechanics); the win is tokens + round-trips + capability, not latency.
-
-### Tests
-
-- Unit tests for the intent resolver (matching/scoring/exact-wins/ambiguity/nth/role/value-prefers-fillable), verdict engine (priority order, signal diff, Backend=0 edge), brief heuristics (page-type/auth/primary-actions), history (cap/monotonic/last/errors filters), network (summarize/filter/shortURL).
-- Live tests against real sites: intent-first saucedemo login, ambiguous + nth + no-match `act`, extract table/links/list/form/article, history recall, wait url/text/gone/timeout, fill-map whole-form, scroll-awareness, network-aware verdict (Wikipedia autocomplete), verdict on a real navigation + add-to-cart.
-- `govulncheck` clean. CI: ubuntu/windows/macos.
-
-## v1.0.0 - 2026-06-19 (first release)
-
-A token-efficient, anti-bot-aware browser-automation MCP server on a purpose-built Go + chromedp engine (no Playwright, no Puppeteer, no Node). Single static binary, cross-platform.
-
-### Tools (15)
-
-`navigate`, `see` (minimal/summary/full), `find`, `read`, `click`, `fill`, `select`, `scroll`, `wait`, `screenshot`, `eval`, `tabs`, `upload`, `press_key`, `hover`.
-
-### Highlights
-
-- **Token-efficient by design**: dense ref-line snapshots, tiered observation (`see minimal` ~27 tok, `find` ~4 tok), and **delta act-and-see** - actions return only what changed, so the agent rarely re-snapshots. ~12-17x smaller snapshots than the major browser MCP servers on real pages; ~2,363 tokens/turn to exist.
-- **Agent-POV**: free `find` on the cached tree, errors that name the next move, JS dialogs auto-accepted, same-origin iframes surfaced with refs and an `in "..."` annotation, every action returns fresh refs via the delta.
-- **Anti-bot / stealth on by default** (`--no-stealth`): `navigator.webdriver` patched, fingerprint spoofed (userAgentData/plugins/languages/window.chrome/WebGL/hardware), `--headless=new`, jittered real-mouse movement before clicks, `--proxy-server`, Cloudflare/captcha challenge detection and auto-wait. Honest limits documented (CDP runtime signal; image-captcha solving needs a paid solver).
-- **Real input where eval is unreliable**: `press_key` fires native key events (Enter submits a form, Escape closes, chars insert); `hover` triggers CSS `:hover` and JS mouseover.
-- **Persistence on by default** (`--no-persist`): a Chrome profile at `<os config dir>/agent-browser` keeps logins/cookies/localStorage across server restarts, so the agent doesn't re-login every run. One profile per process (Chrome locks it); concurrent clients use separate `--user-data-dir` paths.
-- **One binary, 2-command install**: `go install github.com/dondai1234/agent-browser@latest`; `--version` reports the build (injected at release-build time).
-
-### Security and robustness
-
-- URL scheme allowlist (`file://`/`javascript:`/`data:`/`about:`/`blob:` blocked by default; `--allow-insecure-schemes` to opt in); relative URLs rejected.
-- `eval` on by default with `--no-eval` opt-out.
-- JS dialogs auto-accepted (so `alert()` doesn't hang the agent).
-- Crash-aware AX rebuild: a content-signature stable-poll (FNV over node count + every node's role/name/value) returns as soon as the tree actually settles, with a retry on failure.
-- `sync.Mutex` on session state for concurrent MCP calls; crash-aware error wrapping.
-- `govulncheck`: 0 reachable vulnerabilities (Go 1.26.4).
-- Cross-platform: windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64. CI matrix: ubuntu/windows/macos.
+- `bench/successtoken`: task-success-per-token benchmark. 5 multi-step tasks vs
+  `@playwright/mcp` with a deterministic scripted agent. Both 5/5 success;
+  agent-browser 1,142 tokens vs playwright-mcp 2,337 tokens (~2x fewer at equal
+  success).
+
+## [2.0.9] - 2026-06-22
+
+### Added
+
+- `act` DOM-attribute fallback: on no a11y-name match, scans name/id/
+  placeholder/title/aria-label. An input with no accessible name but a `name=`
+  or `id=` is now reachable by intent.
+- `press_key` optional `ref`: focus a specific element first.
+- `wait` default seconds: `seconds=0` defaults to 10s instead of an instant
+  timeout.
+- `eval` unquotes string results and serializes object results to JSON.
+- `where` shows the current tab (id + label + tab count).
+
+### Fixed
+
+- Soft-fail post-action re-snapshot. A click/fill/`act` that lands on a hanging
+  navigation now does one pull (<=8s) and returns a soft verdict ("action fired;
+  page is loading or unreachable") instead of a 16s `isError` that reads like the
+  action failed. The session stays usable, no `reset` needed.
+- `navigate back/forward/reload` hang (latent bug). `chromedp.WaitReady("body")`
+  after a JS-triggered history nav hangs on a stale execution context (bfcache
+  pages don't fire the event chromedp tracks). Replaced with a `readyState` +
+  `document.body` JS poll.
+- `isFatalBrowserErr` hardened: "context canceled" is fatal only when the
+  browser session ctx itself is done, not when a single tab's ctx is cancelled.
+- `select` errors on a no-match option instead of silently no-op'ing.
+- Failed actions recorded in `history` (`history errors=true`).
+
+### Changed
+
+- `reset` is less destructive: if the browser is alive it re-navigates the
+  current tab and keeps your other tabs + logins; a full relaunch happens only
+  when the browser is actually dead.
+
+## [2.0.3] - 2026-06-21
+
+### Fixed
+
+- `tabs new` launching a second Chrome on a locked persistent profile. `NewTab`
+  now derives new tabs from an existing tab's context (which carries the
+  allocated `Browser`), not from `browserCtx` (whose `Browser` was nil).
+
+## [2.0.2] - 2026-06-21
+
+### Fixed
+
+- Persistent-to-temp profile fallback: if Chrome can't start with the requested
+  profile (locked by an orphan, corrupted), relaunches with a throwaway temp
+  profile so the server stays alive.
+- Dead-session guard (the chromedp panic fix): a fatal browser error marks the
+  session dead; `run`/`runTimeout` short-circuit so a dead browser is never
+  retried (fixes `close of closed channel` on retry).
+- `reset` is now a full browser relaunch, recovering from a wedged tab or a
+  crashed browser.
+- Launch timeout separated from the op timeout (60s) so a slow Chrome cold-start
+  doesn't fail `New` under a tight `--op-timeout`.
+
+## [2.0.1] - 2026-06-21
+
+### Added
+
+- Per-operation timeout (`--op-timeout`, default 30s). Every CDP call is bounded;
+  a hung page returns a timeout error and releases the session lock instead of
+  wedging every tool.
+- `reset` tool: the explicit recovery path. Drops the current tab and opens a
+  fresh one at an optional url; other tabs are kept.
+
+### Fixed
+
+- `act` on an ARIA combobox (`<textarea>`-backed): probes the tag, fills an
+  ARIA combobox instead of the no-op `selectJS`.
+- `press_key` multi-char silent no-op: rejects anything that isn't a named key
+  or a single character, redirecting to `fill`/`act` for text.
+- `tabs switch`/`close` by label: both now accept the `label` field as a
+  fallback when `id` is empty.
+
+### Changed
+
+- First-tab cancel no longer kills the browser: the first tab gets its own
+  chromedp target, so `reset`/`close` on t1 closes only that tab.
+
+## [2.0.0] - 2026-06-21
+
+Cognition layer. v1 made snapshots cheap (delta act-and-see). v2 makes the agent
+think in goals, not refs: the tool understands the page, acts on intent, and
+reports a verdict.
+
+### Added
+
+- `act` (intent-first): pass a control's name; local heuristics resolve it (no
+  LLM, no per-call cost) and do the default action for its role. Collapses find
+  + click/fill + see into one call. Ambiguous matches return ranked candidates,
+  never guesses.
+- Verdicts on every action: `navigated to ...`, `dialog opened: ...`, `status:
+  ...`, `changed: +N -M ~K`, `no visible effect`, `CHALLENGE: ...`. Non-nav
+  actions fold in the XHR/Fetch responses that fired (`net: /api/cart 200`).
+- `extract` tool: `table`, `links`, `list`, `form`, `article` kinds.
+- `history` tool: a rolling action log (step/action/verdict/url), capped 200,
+  queryable (`last=N`, `errors=true`).
+- `see level=brief`: ~50-token page brief (type, auth, primary actions, regions,
+  counts) over the a11y tree.
+- `wait` semantic conditions: `url=`, `text=`, `gone=`.
+- `fill` gains a `{ref: value}` map for a whole form in one call.
+- Scroll awareness: `scroll` reports position (`more below` / `at bottom` /
+  `fits viewport`).
+- Challenge detection on every snapshot, not just navigate.
+
+## [1.0.0] - 2026-06-19
+
+First release. A token-efficient, anti-bot-aware browser-automation MCP server
+on a purpose-built Go + chromedp engine (no Playwright, no Puppeteer, no Node).
+Single static binary, cross-platform.
+
+### Added
+
+- 15 tools: `navigate`, `see` (minimal/summary/full), `find`, `read`, `click`,
+  `fill`, `select`, `scroll`, `wait`, `screenshot`, `eval`, `tabs`, `upload`,
+  `press_key`, `hover`.
+- Token-efficient by design: dense ref-line snapshots, tiered observation, delta
+  act-and-see. ~12-17x smaller snapshots than the major browser MCP servers.
+- Anti-bot/stealth on by default (`--no-stealth`): `navigator.webdriver`
+  patched, fingerprint spoofed, `--headless=new`, jittered real-mouse movement,
+  `--proxy-server`, Cloudflare/captcha challenge detection and auto-wait.
+- Real input where eval is unreliable: `press_key` fires native key events;
+  `hover` triggers CSS `:hover` and JS mouseover.
+- Persistence on by default (`--no-persist`): a Chrome profile keeps
+  logins/cookies/localStorage across restarts.
+- One binary, 2-command install: `go install .../cmd/agent-browser@latest`.
+- URL scheme allowlist, JS-dialog auto-accept, crash-aware AX rebuild, session
+  mutex, `govulncheck` clean. Cross-platform: windows/amd64, linux/amd64+arm64,
+  darwin/amd64+arm64.
+
+[Unreleased]: https://github.com/dondai1234/agent-browser/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.2.0
+[3.1.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.1.0
+[3.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.0.0
+[2.4.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.4.0
+[2.2.2]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.2
+[2.2.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.1
+[2.2.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.0
+[2.1.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.1.1
+[2.1.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.1.0
+[2.0.9]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.9
+[2.0.3]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.3
+[2.0.2]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.2
+[2.0.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.1
+[2.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.0
+[1.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v1.0.0

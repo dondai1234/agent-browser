@@ -1,0 +1,16 @@
+# Normalize line endings; let Git handle per-file.
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+
+# Treat the built binary as generated so it never skews the language bar
+/agent-browser linguist-generated=true
+/agent-browser.exe linguist-generated=true
