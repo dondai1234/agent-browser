@@ -163,14 +163,36 @@ func (s *Session) finishMutationLocked(t *tab, before *snapshot.Tree, startTs ti
 		// A bot-check interstitial means the action didn't achieve its intent -
 		// override the verdict so the agent sees the block first.
 		d.Verdict = "CHALLENGE: " + after.Challenge
+		d.Confidence = "uncertain"
 	} else if !d.Navigated {
 		// For non-navigation actions, fold in the XHR/Fetch responses that fired
 		// during the action window - the "did it hit the API" signal. Skipped on
 		// navigation (page load floods the buffer with asset noise) and on
 		// challenges (the verdict is the block, not the network).
-		if evts := s.recentNetLocked(t, startTs); len(evts) > 0 {
+		evts := s.recentNetLocked(t, startTs)
+		if len(evts) > 0 {
 			d.Verdict += "; net: " + summarizeNet(evts)
 		}
+		// Confidence scoring: confirmed if DOM changed significantly or XHRs with
+		// 2xx fired; likely if content shifted or any XHR fired; uncertain otherwise.
+		has2xx := false
+		for _, e := range evts {
+			if e.status >= 200 && e.status < 300 {
+				has2xx = true
+				break
+			}
+		}
+		switch {
+		case d.HasChanges() || has2xx:
+			d.Confidence = "confirmed"
+		case d.ContentChanged || len(evts) > 0:
+			d.Confidence = "likely"
+		default:
+			d.Confidence = "uncertain"
+		}
+	} else {
+		// Navigation is always confirmed (the URL changed).
+		d.Confidence = "confirmed"
 	}
 	url := ""
 	if after != nil {

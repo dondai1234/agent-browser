@@ -111,6 +111,14 @@ type Session struct {
 	// a restart until the profile is freed/recreated).
 	persistFallback bool
 
+	// profilesDir is the root directory for named profiles (mode=profile).
+	// Each profile is a subdirectory used as a Chrome user-data-dir, giving full
+	// isolation (cookies, localStorage, auth, history). Set in New.
+	profilesDir string
+	// activeProfile is the name of the currently active named profile ("" = the
+	// default/temp profile from cfg.UserDataDir). Switched via SwitchProfile.
+	activeProfile string
+
 	// per-tab listener state.
 	dialogListening map[*tab]bool
 
@@ -275,6 +283,10 @@ func New(cfg Config) (*Session, error) {
 	s := &Session{cfg: cfg, stealth: cfg.Stealth, opTimeout: cfg.OpTimeout, dialogListening: map[*tab]bool{}, lastActivity: time.Now(), idleTimeout: cfg.IdleTimeout}
 	if s.opTimeout <= 0 {
 		s.opTimeout = opTimeoutDefault
+	}
+	// Initialize the named-profiles directory (lazy: created on first use).
+	if dir, err := profilesRoot(); err == nil {
+		s.profilesDir = dir
 	}
 	if s.idleTimeout > 0 {
 		s.reaperStop = make(chan struct{})
@@ -838,14 +850,45 @@ func (s *Session) resolveRefLocked(ctx context.Context, ref string) (runtime.Rem
 	}
 	id, err := s.resolveBackendLocked(ctx, el.Backend, ref)
 	if err != nil {
-		// The page re-rendered since the snapshot and the backing DOM node is
-		// gone (dom.ResolveNode failed). Backend node ids aren't reused across
-		// re-renders, so there's no safe automatic re-target - tell the agent to
-		// re-see (free, cached) for fresh refs. Auto-guessing by name/role would
-		// risk acting on the wrong control (two "Delete" buttons, etc.).
+		// Self-healing: the backing DOM node is gone (the page re-rendered).
+		// Try to find a similar element (same role + name) in the current tree
+		// and re-resolve it. Conservative: only auto-heal when exactly one match
+		// exists (no guessing). If multiple/no matches, fall through to the
+		// original error so the agent calls see for fresh refs.
+		if healedID, healErr := s.selfHealRefLocked(ctx, t, el); healErr == nil {
+			return healedID, nil
+		}
 		return "", fmt.Errorf("ref %q is stale (the page re-rendered and the element is gone); call see to refresh refs", ref)
 	}
 	return id, nil
+}
+
+// selfHealRefLocked searches the current tree for an element with the same role
+// + name as the stale element (excluding the stale element itself). If exactly
+// one match is found, it resolves the match's backend node to a remote object id.
+// Conservative: only heals when there's exactly one match (no guessing with
+// multiple identical-named controls). Caller must hold s.mu.
+func (s *Session) selfHealRefLocked(ctx context.Context, t *tab, staleEl snapshot.Element) (runtime.RemoteObjectID, error) {
+	if t == nil || t.tree == nil {
+		return "", fmt.Errorf("no tree")
+	}
+	var match *snapshot.Element
+	for i := range t.tree.Elems {
+		el := &t.tree.Elems[i]
+		if el.Backend == staleEl.Backend {
+			continue // skip the stale element
+		}
+		if el.Role == staleEl.Role && el.Name == staleEl.Name && el.Backend != 0 {
+			if match != nil {
+				return "", fmt.Errorf("self-heal: %d+ matches", 2) // ambiguous
+			}
+			match = el
+		}
+	}
+	if match == nil {
+		return "", fmt.Errorf("self-heal: no match")
+	}
+	return s.resolveBackendLocked(ctx, match.Backend, match.Ref)
 }
 
 // setupTabListenersLocked installs per-tab event listeners: JS dialog
@@ -1303,5 +1346,8 @@ func (s *Session) Where() string {
 		fmt.Fprintf(&b, "last: #%d %s | %s\n", last.Step, last.Action, last.Verdict)
 	}
 	fmt.Fprintf(&b, "scroll: %s\n", s.scrollInfoLocked(t))
+	if s.activeProfile != "" {
+		fmt.Fprintf(&b, "profile: %s\n", s.activeProfile)
+	}
 	return strings.TrimRight(b.String(), "\n")
 }

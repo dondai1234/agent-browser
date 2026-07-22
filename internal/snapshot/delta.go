@@ -25,7 +25,7 @@ var deltaNoiseRoles = map[string]bool{
 // action, return only this, not a fresh full snapshot. Over a multi-step flow
 // this compounds (each action returns a tiny delta instead of re-dumping).
 type Delta struct {
-	Navigated      bool // URL changed → refs fully reset; caller returns new minimal.
+	Navigated      bool // URL changed -> refs fully reset; caller returns new minimal.
 	NewURL         string
 	NewTitle       string
 	Added          []Element // present after, not before (carry NEW refs, usable next)
@@ -33,8 +33,9 @@ type Delta struct {
 	Changed        []Element // same Backend, name/value differs (NEW refs, usable)
 	AddedSignals   []Element // live-region/modal nodes that appeared (toast/dialog opened)
 	RemovedSignals []Element // live-region/modal nodes that vanished (dialog closed)
-	ContentChanged bool      // URL-stable content/order shift (sort/filter/SPA re-render) detected via Tree.Signature; the backend-id element diff misses a pure reorder
+	ContentChanged bool      // URL-stable content/order shift (sort/filter/SPA re-render) detected via Tree.Signature
 	Verdict        string    // one-line semantic outcome ("navigated to ...", "dialog opened: ...", "no visible effect"); set by the browser layer via InferVerdict + challenge/network augmentation
+	Confidence     string    // "confirmed" | "likely" | "uncertain" - how much the agent should trust the verdict
 }
 
 // Diff compares two trees. If the URL changed (navigation), Navigated=true and

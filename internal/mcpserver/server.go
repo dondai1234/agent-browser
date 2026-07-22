@@ -1,11 +1,8 @@
-// Package mcpserver wires the browser.Session into an MCP server: 8 tools
-// (nav, see, act, js, find, tabs, history, session) served over stdio. v3
-// collapses the v2 22-tool surface into a few god-tier, composable tools an
-// agent masters from the defs alone: nav returns an orientation, act is any
-// single action (click/fill/select/hover/press/upload + optional wait) by
-// intent/ref/selector, js is the structured-data hero (run JS with a helper API
-// -> clean JSON), see adds `outline` (a semantic skeleton with working CSS
-// selectors), and find bridges a11y refs and CSS selectors.
+// Package mcpserver wires the browser.Session into an MCP server: 9 tools
+// (nav, see, act, js, find, tabs, history, session, login) served over stdio. v4
+// adds batch form filling (act fields=), named profiles (session mode=profile),
+// self-healing refs, confidence-scored verdicts, and login improvements (remember
+// me, forgot password, SSO redirect detection) - all within the same 9-tool surface.
 package mcpserver
 
 import (
@@ -17,7 +14,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "3.2.0"
+const Version = "4.0.0"
 
 type registerFunc func(srv *mcp.Server, sess *browser.Session)
 

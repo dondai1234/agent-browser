@@ -26,9 +26,12 @@ type LoginArgs struct {
 // LoginResult carries a state-verified verdict + the SSO buttons present (which
 // we report but never auto-click - they open a third-party flow we can't drive).
 type LoginResult struct {
-	Verdict string // "logged in" | "2FA/mfa needed" | "CHALLENGE: ..." | "error: <msg>" | "still on login page" | "no login form found: <hint>"
-	URL     string
-	OAuth   []string // SSO button labels present (e.g. "Sign in with Google")
+	Verdict        string
+	URL            string
+	OAuth          []string // SSO button labels present
+	RememberMe     bool     // a "remember me" / "keep me signed in" checkbox was detected
+	ForgotPassword string   // "forgot password" / "reset password" link text if found
+	SSORedirect    string   // if the URL moved to a different domain after submit
 }
 
 // loginStateJS reads the page's login-relevant state in one evaluate: the
@@ -155,27 +158,54 @@ const loginStateJS = `(() => {
   });
   if (matchTxt(document.body ? document.body.innerText : '', /^(hi|hello|welcome),\s/i)) account = true;
 
+  // "remember me" / "keep me signed in" checkbox near the form
+  var rememberMe = false;
+  document.querySelectorAll('input[type="checkbox"]').forEach(function(el) {
+    if (rememberMe || !vis(el)) return;
+    var s = sig(el);
+    if (/remember|keep me|stay|keep.*sign|remember.*me/i.test(s)) rememberMe = true;
+  });
+  // Also check labels wrapping a checkbox
+  document.querySelectorAll('label').forEach(function(el) {
+    if (rememberMe || !vis(el)) return;
+    if (/remember|keep me|stay|keep.*sign/i.test(txt(el))) {
+      var cb = el.querySelector('input[type="checkbox"]');
+      if (cb && vis(cb)) rememberMe = true;
+    }
+  });
+
+  // "forgot password" / "reset password" link
+  var forgotPassword = '';
+  document.querySelectorAll('a, button, [role="link"]').forEach(function(el) {
+    if (forgotPassword || !vis(el)) return;
+    var s = txt(el).toLowerCase();
+    if (/forgot|reset|recover|change.*(password|pin)/i.test(s)) forgotPassword = txt(el);
+  });
+
   return {
     userSel: uniqueSel(userEl), passSel: uniqueSel(passEl), submitSel: uniqueSel(submitEl),
     oauth: oauth, captcha: !!captcha, twoFA: !!twoFA,
     error: err ? String(err).slice(0, 180) : '',
     loginGone: !passEl && !userEl, account: account,
+    rememberMe: rememberMe, forgotPassword: forgotPassword,
     url: location.href
   };
 })()`
 
 // loginState is the Go view of loginStateJS's JSON.
 type loginState struct {
-	UserSel   string   `json:"userSel"`
-	PassSel   string   `json:"passSel"`
-	SubmitSel string   `json:"submitSel"`
-	OAuth     []string `json:"oauth"`
-	Captcha   bool     `json:"captcha"`
-	TwoFA     bool     `json:"twoFA"`
-	Error     string   `json:"error"`
-	LoginGone bool     `json:"loginGone"`
-	Account   bool     `json:"account"`
-	URL       string   `json:"url"`
+	UserSel        string   `json:"userSel"`
+	PassSel        string   `json:"passSel"`
+	SubmitSel      string   `json:"submitSel"`
+	OAuth          []string `json:"oauth"`
+	Captcha        bool     `json:"captcha"`
+	TwoFA          bool     `json:"twoFA"`
+	Error          string   `json:"error"`
+	LoginGone      bool     `json:"loginGone"`
+	Account        bool     `json:"account"`
+	RememberMe     bool     `json:"rememberMe"`
+	ForgotPassword string   `json:"forgotPassword"`
+	URL            string   `json:"url"`
 }
 
 // readLoginStateLocked evaluates loginStateJS on the current tab. Caller holds s.mu.
@@ -351,7 +381,15 @@ func (s *Session) Login(a LoginArgs) (*LoginResult, error) {
 	final := s.waitForLoginSettleLocked(t, 10*time.Second)
 
 	// 5. State-verified verdict.
-	res := &LoginResult{URL: final.URL, OAuth: final.OAuth}
+	res := &LoginResult{URL: final.URL, OAuth: final.OAuth, RememberMe: st.RememberMe, ForgotPassword: st.ForgotPassword}
+	// SSO redirect: the URL moved to a DIFFERENT DOMAIN (not just a path) after
+	// submit, which means the login redirected to a third-party auth flow.
+	if ssoDomain := domainChanged(startURL, final.URL); ssoDomain != "" && !final.Account {
+		res.SSORedirect = ssoDomain
+		res.Verdict = fmt.Sprintf("SSO redirect to %s: the login redirected to a third-party auth flow; call see to continue, or use act to drive the SSO page", ssoDomain)
+		s.recordHistoryLocked(fmt.Sprintf("login %q", a.Username), res.Verdict, final.URL)
+		return res, nil
+	}
 	switch {
 	case final.Captcha:
 		res.Verdict = "CHALLENGE: " + captchaAfterLoginMsg
@@ -389,6 +427,32 @@ func loginURLChanged(before, after string) bool {
 		return strings.TrimRight(u, "/")
 	}
 	return strip(before) != strip(after)
+}
+
+// domainChanged reports whether the URL moved to a different DOMAIN (not just
+// a path change). Returns the new domain if so, "" otherwise. Used to detect
+// SSO redirects (the login redirects to accounts.google.com, login.microsoftonline.com, etc.).
+func domainChanged(before, after string) string {
+	if before == "" || after == "" || before == after {
+		return ""
+	}
+	extractDomain := func(u string) string {
+		if i := strings.Index(u, "://"); i >= 0 {
+			u = u[i+3:]
+		}
+		if i := strings.IndexByte(u, '/'); i >= 0 {
+			u = u[:i]
+		}
+		if i := strings.IndexByte(u, ':'); i >= 0 {
+			u = u[:i]
+		}
+		return strings.ToLower(u)
+	}
+	db, da := extractDomain(before), extractDomain(after)
+	if db != "" && da != "" && db != da {
+		return da
+	}
+	return ""
 }
 
 // waitForLoginSettleLocked polls loginStateJS until the login resolves (form

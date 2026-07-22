@@ -7,6 +7,48 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-07-22
+
+Major upgrade: profiles, batch form filling, confidence-scored verdicts,
+self-healing refs, and login improvements. Same 9-tool surface - every new
+feature folds into an existing tool via a new parameter or internal improvement.
+
+### Added
+
+- **Named profiles** (`session mode=profile`): create, switch, list, delete,
+  export, and import isolated browser profiles. Each profile is a separate Chrome
+  user-data-dir with its own cookies, localStorage, auth, and history. Switch
+  in one call (the browser relaunches with the new identity). Export/import
+  cookies + localStorage as JSON (Playwright storageState-compatible). Resolves
+  [issue #1](https://github.com/dondai1234/goshawk/issues/1).
+- **Batch form filling** (`act fields={...}`): pass a map of field labels to
+  values and goshawk resolves each label to a form field, auto-detects the type
+  (text input, checkbox, radio, select, custom combobox, slider, file input),
+  and performs the right action in one call. Re-snapshots once and reports
+  validation errors. One call instead of N for filling a whole form.
+- **Confidence-scored verdicts**: every act verdict now includes a confidence
+  tag - `[confirmed]` (DOM changed or XHR 2xx fired), `[likely]` (content
+  shifted or XHR fired), or `[uncertain]` (no visible effect). Tells the agent
+  when to trust the verdict and when to verify with `see`.
+- **Self-healing refs**: when a ref is stale (the page re-rendered and the
+  element's backend node is gone), goshawk auto-re-resolves by matching the
+  element's role + name in the current tree. Conservative: only heals when
+  exactly one match exists (no guessing). Saves a `see` round-trip in the
+  common React re-render case.
+- **Login improvements**: the `login` tool now detects and reports "remember me" /
+  "keep me signed in" checkboxes, "forgot password" links, and SSO redirects
+  (when the URL moves to a different domain after submit). The verdict includes
+  all detected signals so the agent can act on them.
+
+### Changed
+
+- Instructions string rewritten for v4: adds profiles, form filling, confidence
+  verdicts, and explicit DO NOT rules to force perfect agent usage.
+- `session` tool description updated to document `mode=profile`.
+- `act` tool description updated to document `fields=` for batch form filling.
+- `login` tool description updated to document remember-me, forgot-password,
+  and SSO redirect detection.
+
 ## [3.2.0] - 2026-07-04
 
 Real-world fluency: the tool now handles the three things that break agents on
@@ -336,7 +378,8 @@ Single static binary, cross-platform.
   mutex, `govulncheck` clean. Cross-platform: windows/amd64, linux/amd64+arm64,
   darwin/amd64+arm64.
 
-[Unreleased]: https://github.com/dondai1234/goshawk/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/dondai1234/goshawk/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/dondai1234/goshawk/releases/tag/v4.0.0
 [3.2.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.2.0
 [3.1.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.1.0
 [3.0.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.0.0

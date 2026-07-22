@@ -23,21 +23,22 @@ import (
 // condition fuses "act, then wait for the result" into one call so the delta
 // reflects the post-wait page (the common click-then-wait-for-redirect case).
 type PerformArgs struct {
-	Intent    string // control name (a11y + DOM-attribute fallback)
-	Ref       string // stable ref from see/find
-	Selector  string // CSS selector (escape hatch for a11y-invisible elements)
-	Value     string // fill/select value (for inputs/dropdowns)
-	Role      string // constrain intent matches to a role
-	Nth       int    // disambiguate ambiguous intent matches
-	Hover     bool   // hover instead of click
-	Key       string // press a key (named key or single char)
-	Modifiers string // key modifiers: ctrl, shift, alt, meta (+-joined)
+	Intent    string
+	Ref       string
+	Selector  string
+	Value     string
+	Role      string
+	Nth       int
+	Hover     bool
+	Key       string
+	Modifiers string
 	Files     []string
-	WaitURL   string // after the action, wait for URL to contain this
-	WaitText  string // ...wait for body text to contain this
-	WaitGone  string // ...wait for body text to no longer contain this
-	WaitMs    int    // wait budget (default 10000)
-	SettleMs  int    // DOM settle before re-snapshot (default 150)
+	Fields    map[string]string // batch form fill: {label: value} pairs
+	WaitURL   string
+	WaitText  string
+	WaitGone  string
+	WaitMs    int
+	SettleMs  int
 }
 
 // PerformResult is the outcome. For an ambiguous intent, Resolved is nil and
@@ -46,11 +47,12 @@ type PerformArgs struct {
 type PerformResult struct {
 	Verb           string
 	Resolved       *snapshot.Element
-	Target         string // human label for the non-intent paths ("ref r3", "selector .x", "focused", "auto file input")
+	Target         string
 	Candidates     []snapshot.Element
 	CandidatesText string
 	Delta          *snapshot.Delta
 	After          *snapshot.Tree
+	FormFill       *FormFillResult // present when fields= was used (batch form fill)
 }
 
 // actOnElementLocked performs the role-appropriate action (click/fill/select) on
@@ -257,6 +259,17 @@ func (s *Session) Perform(a PerformArgs) (*PerformResult, error) {
 	}
 	before := t.tree
 	startTs := time.Now()
+
+	// Category 0: batch form fill. Mutually exclusive with all other modes.
+	if len(a.Fields) > 0 {
+		action := fmt.Sprintf("form fill (%d fields)", len(a.Fields))
+		res, err := s.FormFill(a.Fields, a.SettleMs)
+		if err != nil {
+			s.recordActionErrorLocked(before, action, err)
+			return &PerformResult{Verb: "form-fill"}, err
+		}
+		return &PerformResult{Verb: "form-fill", Delta: res.Delta, After: res.After, FormFill: res}, nil
+	}
 
 	// Category 1: key press. Optional focus target (ref/intent; selector not
 	// supported - use ref/intent to target a key press).
