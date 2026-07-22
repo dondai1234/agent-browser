@@ -86,11 +86,19 @@ const validationErrorsJS = `(function(){
 // label), set for sliders, upload for files. Then re-snapshots once and checks
 // for validation errors. Atomic (one lock). Returns a delta + per-field results.
 func (s *Session) FormFill(fields map[string]string, settleMs int) (*FormFillResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.formFillLocked(fields, settleMs)
+}
+
+// formFillLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormFillResult, error) {
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("form fill: no fields provided (pass fields={\"Label\": \"value\", ...})")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Remove the s.mu.Lock/defer s.mu.Unlock() since the caller (Perform) already
+	// holds the lock. This was a DEADLOCK: Perform acquires s.mu, then calls
+	// FormFill which tried to acquire s.mu again. sync.Mutex is not reentrant.
 	t := s.curTabLocked()
 	if t == nil || t.tree == nil {
 		return nil, ErrNoSnapshot

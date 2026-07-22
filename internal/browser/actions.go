@@ -152,7 +152,7 @@ func (s *Session) finishMutationLocked(t *tab, before *snapshot.Tree, startTs ti
 		if before != nil {
 			url = before.URL
 		}
-		soft := &snapshot.Delta{Verdict: "action fired; page is loading or unreachable - call see to refresh refs"}
+		soft := &snapshot.Delta{Verdict: "action fired; page is loading or unreachable - call see to refresh refs", Confidence: "uncertain"}
 		s.recordHistoryLocked(action, soft.Verdict, url)
 		return soft, nil, nil
 	}

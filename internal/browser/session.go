@@ -746,7 +746,21 @@ func (s *Session) pullAXLocked(t *tab) error {
 	// document) and merge, so in-iframe elements get refs and are
 	// clickable/fillable across the frame boundary. Cross-origin iframes have
 	// no ContentDocument and are skipped (opaque to any tool).
-	extra, frameOf := s.gatherIframeAXLocked(t)
+	// Optimization: skip the DOM query entirely when the AX tree has no iframe
+	// nodes (the common case - most pages have no iframes). This saves a CDP
+	// round-trip on every snapshot.
+	var extra []*accessibility.Node
+	frameOf := map[int64]string{}
+	hasIframes := false
+	for _, n := range nodes {
+		if n != nil && n.Role != nil && string(n.Role.Value) == "Iframe" {
+			hasIframes = true
+			break
+		}
+	}
+	if hasIframes {
+		extra, frameOf = s.gatherIframeAXLocked(t)
+	}
 	all := nodes
 	if len(extra) > 0 {
 		all = append(append([]*accessibility.Node(nil), nodes...), extra...)

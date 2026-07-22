@@ -263,7 +263,7 @@ func (s *Session) Perform(a PerformArgs) (*PerformResult, error) {
 	// Category 0: batch form fill. Mutually exclusive with all other modes.
 	if len(a.Fields) > 0 {
 		action := fmt.Sprintf("form fill (%d fields)", len(a.Fields))
-		res, err := s.FormFill(a.Fields, a.SettleMs)
+		res, err := s.formFillLocked(a.Fields, a.SettleMs)
 		if err != nil {
 			s.recordActionErrorLocked(before, action, err)
 			return &PerformResult{Verb: "form-fill"}, err
