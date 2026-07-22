@@ -344,9 +344,11 @@ func (s *Session) idleReaperLoop(d time.Duration) {
 // fallback that New used to run eagerly. Caller must hold s.mu.
 func (s *Session) ensureBrowserLocked() error {
 	s.touchLocked()
-	if len(s.tabs) > 0 {
+	if len(s.tabs) > 0 && s.browserCtx != nil && s.browserCtx.Err() == nil {
 		return nil
 	}
+	// browserCtx is nil or cancelled (teardownBrowserLocked niled it after a
+	// profile switch, reset, or idle reaper). Relaunch.
 	if s.dead != nil {
 		return s.dead
 	}
@@ -441,10 +443,21 @@ func (s *Session) launchBrowserLocked() error {
 	return s.setupTabListenersLocked(s.tabs[0])
 }
 
-// teardownBrowserLocked cancels the allocator + browser session + all tabs, so a
-// failed launch (or a Reset) releases the Chrome process + chromedp goroutines
-// before a fresh launch. Caller must hold s.mu.
+// teardownBrowserLocked cancels the allocator + browser session + all tabs,
+// so a failed launch (or a Reset) releases the Chrome process + chromedp goroutines
+// before a fresh launch. Waits for the Chrome process to actually exit (up to 5s)
+// to prevent orphaned Chrome processes on Windows and user-data-dir lock
+// contention on profile switch / reset. Caller must hold s.mu.
 func (s *Session) teardownBrowserLocked() {
+	// Capture the Browser's LostConnection channel before cancelling, so we
+	// can wait for Chrome to actually exit (not just send the kill signal).
+	var lostConn chan struct{}
+	if len(s.tabs) > 0 {
+		if c := chromedp.FromContext(s.tabs[0].ctx); c != nil && c.Browser != nil {
+			lostConn = c.Browser.LostConnection
+		}
+	}
+
 	for _, t := range s.tabs {
 		if t.cancel != nil {
 			t.cancel()
@@ -457,6 +470,26 @@ func (s *Session) teardownBrowserLocked() {
 	if s.allocCancel != nil {
 		s.allocCancel()
 	}
+
+	// Wait for the Chrome process to actually exit. Without this, the Chrome
+	// process can be orphaned (especially on Windows: the OS doesn't always
+	// kill child processes when the parent exits) and it holds the user-data-dir
+	// lock, causing the next launch to fail or hang (the profile-switch failure
+	// mode). LostConnection is closed when the CDP websocket drops (Chrome is
+	// shutting down / has been killed). If the browser was never started or
+	// already crashed, lostConn is nil and we skip the wait.
+	if lostConn != nil {
+		select {
+		case <-lostConn:
+			// Chrome closed the websocket; the process is exiting/exited.
+		case <-time.After(5 * time.Second):
+			// Chrome didn't close in 5s; the OS will eventually clean it up.
+		}
+	}
+
+	s.browserCtx = nil
+	s.browserCancel = nil
+	s.allocCancel = nil
 }
 
 // PersistFallback reports whether New fell back to a throwaway temp profile
@@ -464,24 +497,16 @@ func (s *Session) teardownBrowserLocked() {
 // can log it so the user knows persistence is off until the profile is freed.
 func (s *Session) PersistFallback() bool { return s.persistFallback }
 
-// Close shuts down the browser.
+// Close shuts down the browser, waiting for the Chrome process to actually
+// exit so it's not orphaned (especially on Windows). Called via defer in the
+// MCP server's runMCP and the debug CLI's runDebug.
 func (s *Session) Close() {
 	if s.reaperStop != nil {
 		close(s.reaperStop)
 	}
 	s.mu.Lock()
-	for _, t := range s.tabs {
-		if t.cancel != nil {
-			t.cancel()
-		}
-	}
+	s.teardownBrowserLocked()
 	s.mu.Unlock()
-	if s.browserCancel != nil {
-		s.browserCancel()
-	}
-	if s.allocCancel != nil {
-		s.allocCancel()
-	}
 }
 
 // curTabLocked returns the current tab. Caller must hold s.mu.
@@ -1172,7 +1197,7 @@ func (s *Session) Reset(url string) (*snapshot.Tree, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	browserAlive := s.dead == nil && (s.browserCtx == nil || s.browserCtx.Err() == nil)
+	browserAlive := s.dead == nil && s.browserCtx != nil && s.browserCtx.Err() == nil
 	if browserAlive {
 		// Lighter recovery: the browser is fine, only the current tab's last op
 		// wedged/timed out. Probe the tab with a cheap Location (bounded 5s); if

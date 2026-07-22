@@ -54,8 +54,15 @@ func profilesRoot() (string, error) {
 	return root, nil
 }
 
-// ListProfiles lists all named profiles. Caller must hold s.mu.
+// ListProfiles lists all named profiles.
 func (s *Session) ListProfiles() []ProfileInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listProfilesLocked()
+}
+
+// listProfilesLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) listProfilesLocked() []ProfileInfo {
 	if s.profilesDir == "" {
 		return nil
 	}
@@ -83,8 +90,15 @@ func (s *Session) ListProfiles() []ProfileInfo {
 }
 
 // CreateProfile creates a new named profile directory. Returns an error if it
-// already exists. Caller must hold s.mu.
+// already exists.
 func (s *Session) CreateProfile(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createProfileLocked(name)
+}
+
+// createProfileLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) createProfileLocked(name string) error {
 	name = sanitizeProfileName(name)
 	if name == "" {
 		return errors.New("profile name required (alphanumeric, dash, underscore)")
@@ -99,8 +113,15 @@ func (s *Session) CreateProfile(name string) error {
 // SwitchProfile switches to a named profile. Tears down the current browser
 // (if any) and sets the user-data-dir to the profile's directory. The browser
 // relaunches lazily on the next navigate. Page state from the old profile is
-// lost. Caller must hold s.mu.
+// lost.
 func (s *Session) SwitchProfile(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.switchProfileLocked(name)
+}
+
+// switchProfileLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) switchProfileLocked(name string) error {
 	name = sanitizeProfileName(name)
 	if name == "" {
 		return errors.New("profile name required")
@@ -121,8 +142,14 @@ func (s *Session) SwitchProfile(name string) error {
 
 // DeleteProfile removes a named profile directory. If it's the active profile,
 // tears down the browser first and reverts to the default (temp) profile.
-// Caller must hold s.mu.
 func (s *Session) DeleteProfile(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteProfileLocked(name)
+}
+
+// deleteProfileLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) deleteProfileLocked(name string) error {
 	name = sanitizeProfileName(name)
 	if name == "" {
 		return errors.New("profile name required")
@@ -145,13 +172,22 @@ func (s *Session) DeleteProfile(name string) error {
 
 // CurrentProfile returns the active profile name ("" = default/temp profile).
 func (s *Session) CurrentProfile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.activeProfile
 }
 
 // ExportState exports the current page's cookies + the current origin's
 // localStorage as a JSON string. The browser must be running with a page
-// loaded. Caller must hold s.mu.
+// loaded.
 func (s *Session) ExportState() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.exportStateLocked()
+}
+
+// exportStateLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) exportStateLocked() (string, error) {
 	t := s.curTabLocked()
 	if t == nil || t.tree == nil {
 		return "", ErrNoSnapshot
@@ -207,8 +243,15 @@ func (s *Session) ExportState() (string, error) {
 
 // ImportState imports cookies + localStorage from a JSON string. Clears
 // existing cookies first (clean restore, not a merge). The browser must be
-// running with a page loaded. Caller must hold s.mu.
+// running with a page loaded.
 func (s *Session) ImportState(data string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.importStateLocked(data)
+}
+
+// importStateLocked is the lock-held implementation. Caller must hold s.mu.
+func (s *Session) importStateLocked(data string) error {
 	t := s.curTabLocked()
 	if t == nil || t.tree == nil {
 		return ErrNoSnapshot
