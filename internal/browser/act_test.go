@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v3/internal/snapshot"
 )
 
 func treeWith(elems ...snapshot.Element) *snapshot.Tree {

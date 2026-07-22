@@ -22,7 +22,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v3/internal/snapshot"
 )
 
 // ErrNoSnapshot is returned when the current tab has no cached page tree.
@@ -247,7 +247,7 @@ const maxHistory = 200
 type Config struct {
 	Headless         bool
 	Timeout          time.Duration // >0 bounds the first tab (debug CLI); 0 = long-lived (MCP server)
-	UserDataDir      string        // persistent profile dir; "" = a throwaway temp profile (the MCP server defaults this to <os config dir>/agent-browser for persistence unless --no-persist)
+	UserDataDir      string        // persistent profile dir; "" = a throwaway temp profile (the MCP server defaults this to <os config dir>/goshawk for persistence unless --no-persist)
 	Proxy            string        // proxy server URL (e.g. http://user:pass@host:port); "" = none
 	UserAgent        string        // override the User-Agent; "" = Chrome default
 	ViewportW        int           // window width; 0 = 1366

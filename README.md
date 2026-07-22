@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/img/hero.png" width="720" alt="agent-browser: token-efficient browser automation for AI agents">
+<img src="docs/img/hero.png" width="720" alt="goshawk: token-efficient browser automation for AI agents">
 
 <br>
 
@@ -10,8 +10,8 @@
 
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](https://go.dev)
-[![build](https://github.com/dondai1234/agent-browser/actions/workflows/test.yml/badge.svg)](https://github.com/dondai1234/agent-browser/actions/workflows/test.yml)
-[![go report](https://goreportcard.com/badge/github.com/dondai1234/agent-browser)](https://goreportcard.com/report/github.com/dondai1234/agent-browser)
+[![build](https://github.com/dondai1234/goshawk/actions/workflows/test.yml/badge.svg)](https://github.com/dondai1234/goshawk/actions/workflows/test.yml)
+[![go report](https://goreportcard.com/badge/github.com/dondai1234/goshawk)](https://goreportcard.com/report/github.com/dondai1234/goshawk)
 [![MCP](https://img.shields.io/badge/MCP-server-6E56CF.svg)](https://modelcontextprotocol.io)
 
 <br>
@@ -26,11 +26,11 @@
 
 ## Why
 
-The big browser MCP servers tax the agent every step. agent-browser adds a **cognition layer** on top of a token-efficient engine, so the agent spends tokens on the task, not on interpreting the page.
+The big browser MCP servers tax the agent every step. goshawk adds a **cognition layer** on top of a token-efficient engine, so the agent spends tokens on the task, not on interpreting the page.
 
 Measured head-to-head against the two largest browser-automation MCP servers:
 
-|  | **agent-browser** | Playwright MCP | Chrome DevTools MCP |
+|  | **goshawk** | Playwright MCP | Chrome DevTools MCP |
 |---|:--:|:--:|:--:|
 | Snapshot of Hacker News | **~1,200 tok** | ~14,700 tok | ~9,800 tok |
 | Snapshot of a GitHub repo | **~1,250 tok** | ~21,600 tok | ~20,800 tok |
@@ -38,7 +38,7 @@ Measured head-to-head against the two largest browser-automation MCP servers:
 | Saucedemo login (real task, all succeed) | **~154 tok** | ~1,714 tok | ~1,483 tok |
 
 <div align="center">
-<img src="docs/img/tokens.png" width="760" alt="Bar chart: saucedemo login token cost, agent-browser ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
+<img src="docs/img/tokens.png" width="760" alt="Bar chart: saucedemo login token cost, goshawk ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
 </div>
 
 Within Playwright MCP's ballpark on connect cost (and now lighter: 9 tools, ~1,900 tok to connect), and **for that you also get five things neither has**: intent-first `act`, action `verdict`s, a JS helper API (`js`) for one-call structured data, a one-call universal `login` (single + multi-step, state-verified), and `history`. On a real task the gap is ~10x: the login above is now a single `login` call (or `nav` + three `act` calls) instead of find, fill, fill, find, click, re-see, re-see.
@@ -80,8 +80,8 @@ A real-world-fluency pass: the tool now handles the three things that break agen
 Requires [Go](https://go.dev) 1.26+ and Chrome/Chromium (auto-discovered).
 
 ```sh
-go install github.com/dondai1234/agent-browser/v3/cmd/agent-browser@latest
-agent-browser --version        # verify; re-run the install command to update
+go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+goshawk --version        # verify; re-run the install command to update
 ```
 
 Add it to any MCP client:
@@ -89,24 +89,24 @@ Add it to any MCP client:
 ```json
 {
   "mcpServers": {
-    "agent-browser": { "command": "agent-browser", "args": ["mcp"] }
+    "goshawk": { "command": "goshawk", "args": ["mcp"] }
   }
 }
 ```
 
-Cursor, Claude Code, Claude Desktop, Windsurf, VS Code Copilot, opencode, Hermes Agent, and OpenClaw all work with this shape (VS Code uses `"servers"` instead of `"mcpServers"`). Ready-to-paste configs and per-client file paths are in [`examples/`](examples/README.md). Claude Code one-liner: `claude mcp add agent-browser -- agent-browser mcp`.
+Cursor, Claude Code, Claude Desktop, Windsurf, VS Code Copilot, opencode, Hermes Agent, and OpenClaw all work with this shape (VS Code uses `"servers"` instead of `"mcpServers"`). Ready-to-paste configs and per-client file paths are in [`examples/`](examples/README.md). Claude Code one-liner: `claude mcp add goshawk -- goshawk mcp`.
 
-> `spawn agent-browser ENOENT`? The client can't find the binary on its PATH; use the absolute path in `command`: `$(go env GOPATH)/bin/agent-browser` (append `.exe` on Windows).
+> `spawn goshawk ENOENT`? The client can't find the binary on its PATH; use the absolute path in `command`: `$(go env GOPATH)/bin/goshawk` (append `.exe` on Windows).
 
 <details>
 <summary><b>Or: paste this prompt and let your agent install it</b></summary>
 
 ```
-Install the agent-browser MCP server and connect it to this client:
-1. Run:  go install github.com/dondai1234/agent-browser/v3/cmd/agent-browser@latest
-2. Verify:  agent-browser --version   (expect an agent-browser v3.x version)
+Install the goshawk MCP server and connect it to this client:
+1. Run:  go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+2. Verify:  goshawk --version   (expect an goshawk v3.x version)
 3. Find out which agent harness you're running on (Opencode, OpenClaw, Hermes Agent, etc.) and locate its MCP config.
-4. Add a stdio MCP server named "agent-browser": command "agent-browser", args ["mcp"].
+4. Add a stdio MCP server named "goshawk": command "goshawk", args ["mcp"].
 5. Confirm it connects, then tell me it's ready.
 ```
 
@@ -156,7 +156,7 @@ Every tool's description is hand-crafted to tell the agent exactly what to pass,
 
 ## Flags
 
-`--headless` · `--user-data-dir` · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/agent-browser`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-cookie-dismiss` (cookie/consent banner auto-dismiss on nav; on by default) · `--no-eval` (`js` on by default; disable to forbid arbitrary page JS) · `--op-timeout` (per-CDP-op, default 30s) · `--idle-timeout` (auto-close Chrome after this long idle, default 10m; 0 disables) · `--allow-insecure-schemes` · `--version`
+`--headless` · `--user-data-dir` · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/goshawk`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-cookie-dismiss` (cookie/consent banner auto-dismiss on nav; on by default) · `--no-eval` (`js` on by default; disable to forbid arbitrary page JS) · `--op-timeout` (per-CDP-op, default 30s) · `--idle-timeout` (auto-close Chrome after this long idle, default 10m; 0 disables) · `--allow-insecure-schemes` · `--version`
 
 ---
 

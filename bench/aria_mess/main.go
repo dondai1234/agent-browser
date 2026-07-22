@@ -1,4 +1,4 @@
-// Package main is the "ugly ARIA" benchmark: it runs the agent-browser snapshot
+// Package main is the "ugly ARIA" benchmark: it runs the goshawk snapshot
 // against a set of pages that model the worst real-world ARIA pathologies
 // (generic soup, decorative div[role=button], duplicate main landmarks,
 // mislabeled controls, nameless icon buttons, link soup, landmark soup, a
@@ -32,8 +32,8 @@ import (
 
 	"github.com/chromedp/cdproto/accessibility"
 
-	"github.com/dondai1234/agent-browser/v3/internal/browser"
-	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v3/internal/snapshot"
 )
 
 // pathology is one test page: a name + its HTML.
@@ -126,13 +126,13 @@ var pathologies = []pathology{
 }
 
 type pageResult struct {
-	Page        string
-	Tokens      float64
-	TotalRefs   int
-	NamedRefs   int
-	NonFocus    int
-	Landmarks   int
-	DupMain     int
+	Page      string
+	Tokens    float64
+	TotalRefs int
+	NamedRefs int
+	NonFocus  int
+	Landmarks int
+	DupMain   int
 }
 
 func measure(s *browser.Session, name, html string, serve func(string) string) pageResult {

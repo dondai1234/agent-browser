@@ -13,7 +13,7 @@
   <text x="120" y="163" text-anchor="middle" fill="#A78BFA" font-size="11">(you)</text>
 
   <rect x="360" y="112" width="180" height="72" rx="12" fill="none" stroke="#2DD4BF" stroke-width="2"/>
-  <text x="450" y="143" text-anchor="middle" fill="#F5E8FF" font-size="15" font-weight="600">agent-browser</text>
+  <text x="450" y="143" text-anchor="middle" fill="#F5E8FF" font-size="15" font-weight="600">goshawk</text>
   <text x="450" y="163" text-anchor="middle" fill="#A78BFA" font-size="11">resolves + acts</text>
 
   <rect x="700" y="112" width="140" height="72" rx="12" fill="none" stroke="#FF2D95" stroke-width="2"/>

@@ -2,6 +2,6 @@
 # Hermes Agent (NousResearch) - MCP servers are declared in YAML under mcp_servers.
 # Reload after editing with:  /reload-mcp
 mcp_servers:
-  agent-browser:
-    command: "agent-browser"
+  goshawk:
+    command: "goshawk"
     args: ["mcp"]

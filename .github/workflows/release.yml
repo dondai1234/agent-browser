@@ -22,7 +22,7 @@ jobs:
             os=${tgt%/*}; arch=${tgt#*/}
             ext=""; [ "$os" = "windows" ] && ext=".exe"
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-              -o "dist/agent-browser-${os}-${arch}${ext}" ./cmd/agent-browser
+              -o "dist/goshawk-${os}-${arch}${ext}" ./cmd/goshawk
           done
           ls -la dist
       - uses: softprops/action-gh-release@v2

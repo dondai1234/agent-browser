@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        agent-browser prefers fewer, more powerful tools over many overlapping
+        goshawk prefers fewer, more powerful tools over many overlapping
         ones. Before proposing a new tool, consider whether the capability fits
         into an existing tool (often `act` or `js`).
   - type: textarea

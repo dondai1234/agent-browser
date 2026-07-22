@@ -5,7 +5,7 @@ the role whitelist keeps on the **ugly end** - the messy SPAs where junk that
 used to live in dead markup moves UP into the semantic tree (a static whitelist
 can't tell a meaningful control from a mislabeled one).
 
-This harness runs the agent-browser snapshot against 11 synthetic pages that
+This harness runs the goshawk snapshot against 11 synthetic pages that
 model the worst real ARIA pathologies and reports, per page, what the whitelist
 keeps:
 

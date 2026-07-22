@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security report (private)
-    url: https://github.com/dondai1234/agent-browser/security/advisories/new
+    url: https://github.com/dondai1234/goshawk/security/advisories/new
     about: Report a security vulnerability privately. Do not open a public issue for security problems.

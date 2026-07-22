@@ -13,7 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v3/internal/browser"
 )
 
 // Version is the server version reported to MCP clients.
@@ -40,7 +40,7 @@ var toolOrder = []string{"nav", "see", "act", "js", "find", "tabs", "history", "
 
 // New builds an MCP server with all tools bound to a Session.
 func New(sess *browser.Session, opts *mcp.ServerOptions) (*mcp.Server, error) {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "agent-browser", Version: Version}, opts)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "goshawk", Version: Version}, opts)
 	for _, name := range toolOrder {
 		if reg, ok := toolRegistry[name]; ok {
 			reg(srv, sess)

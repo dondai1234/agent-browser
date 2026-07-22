@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "agent-browser": {
-      "command": "agent-browser",
+    "goshawk": {
+      "command": "goshawk",
       "args": ["mcp"]
     }
   }

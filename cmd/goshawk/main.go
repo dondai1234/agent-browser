@@ -1,15 +1,15 @@
-// Command agent-browser is the entry point.
+// Command goshawk is the entry point.
 //
 // Debug CLI (proving the engine):
 //
-//	go run ./cmd/agent-browser --url https://example.com                  # minimal orientation
-//	go run ./cmd/agent-browser --url https://news.ycombinator.com --level summary
-//	go run ./cmd/agent-browser --url https://news.ycombinator.com --find-role link --find-text More --find-exact
-//	go run ./cmd/agent-browser --url https://example.com --click r2        # click ref, show the delta
+//	go run ./cmd/goshawk --url https://example.com                  # minimal orientation
+//	go run ./cmd/goshawk --url https://news.ycombinator.com --level summary
+//	go run ./cmd/goshawk --url https://news.ycombinator.com --find-role link --find-text More --find-exact
+//	go run ./cmd/goshawk --url https://example.com --click r2        # click ref, show the delta
 //
 // MCP server (the actual tool, for Cursor/Copilot/Claude Code):
 //
-//	agent-browser mcp                          # eval on by default; add --no-eval to disable
+//	goshawk mcp                          # eval on by default; add --no-eval to disable
 package main
 
 import (
@@ -28,9 +28,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/v3/internal/browser"
-	"github.com/dondai1234/agent-browser/v3/internal/mcpserver"
-	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v3/internal/mcpserver"
+	"github.com/dondai1234/goshawk/v3/internal/snapshot"
 )
 
 // version is the build version. Overridden at release-build time via
@@ -57,7 +57,7 @@ func versionString() string {
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version" || os.Args[1] == "version") {
-		fmt.Println("agent-browser", versionString())
+		fmt.Println("goshawk", versionString())
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
@@ -71,7 +71,7 @@ func main() {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	headless := fs.Bool("headless", true, "headless Chrome (uses --headless=new; --headless=false = headed, real GPU fingerprint - best for hard anti-bot targets)")
-	userDataDirFlag := fs.String("user-data-dir", "", "persistent Chrome profile dir (overrides the default location); by default a profile is kept at <os config dir>/agent-browser so logins/cookies survive restarts")
+	userDataDirFlag := fs.String("user-data-dir", "", "persistent Chrome profile dir (overrides the default location); by default a profile is kept at <os config dir>/goshawk so logins/cookies survive restarts")
 	noPersist := fs.Bool("no-persist", false, "use a throwaway temp profile (no saved logins); by default a persistent profile is kept so the agent doesn't re-login every run")
 	proxy := fs.String("proxy-server", "", "proxy URL (e.g. http://user:pass@host:port); a residential proxy is the #1 fix for IP-reputation bot blocks")
 	userAgent := fs.String("user-agent", "", "override the User-Agent; empty = Chrome default")
@@ -85,21 +85,21 @@ func runMCP(args []string) {
 	versionFlag := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(args)
 	if *versionFlag {
-		fmt.Println("agent-browser", versionString())
+		fmt.Println("goshawk", versionString())
 		return
 	}
 
 	// Resolve the profile dir: an explicit --user-data-dir wins; otherwise, by
-	// default, persist to <os config dir>/agent-browser so logins/cookies/local
+	// default, persist to <os config dir>/goshawk so logins/cookies/local
 	// storage survive server restarts (the agent doesn't re-login each run).
 	// --no-persist falls back to a throwaway temp profile (the old default).
-	// Note: one persistent profile can only be used by one agent-browser process
+	// Note: one persistent profile can only be used by one goshawk process
 	// at a time (Chrome locks it); run concurrent clients with separate
 	// --user-data-dir paths.
 	userDataDir := *userDataDirFlag
 	if userDataDir == "" && !*noPersist {
 		if d, err := os.UserConfigDir(); err == nil {
-			userDataDir = filepath.Join(d, "agent-browser")
+			userDataDir = filepath.Join(d, "goshawk")
 			if err := os.MkdirAll(userDataDir, 0o700); err != nil {
 				log.Fatalf("create profile dir %s: %v", userDataDir, err)
 			}
@@ -121,13 +121,13 @@ func runMCP(args []string) {
 	}
 	defer sess.Close()
 	if sess.PersistFallback() {
-		log.Printf("agent-browser: the persistent profile (%s) was locked or corrupted (likely a leftover Chrome from a prior run), so this session is using a throwaway temp profile. Logins/cookies will NOT survive a restart until the profile is freed. Kill any leftover agent-browser Chrome processes (Task Manager -> chrome.exe owned by agent-browser) to restore persistence.", userDataDir)
+		log.Printf("goshawk: the persistent profile (%s) was locked or corrupted (likely a leftover Chrome from a prior run), so this session is using a throwaway temp profile. Logins/cookies will NOT survive a restart until the profile is freed. Kill any leftover goshawk Chrome processes (Task Manager -> chrome.exe owned by goshawk) to restore persistence.", userDataDir)
 	}
 	sess.AllowInsecureSchemes = *allowInsecure
 	sess.AllowEval = !*noEval
 
 	opts := &mcp.ServerOptions{
-		Instructions: "agent-browser v3: 9 tools for agent browser automation. Dense a11y-tree snapshots (ref-lines, not aria dumps), intent-first actions, a verdict on every action, and a JS helper API for structured data. No per-call LLM. DECISION TREE: (1) Enter a page -> nav url= (returns an orientation: page type, auth, the top primary actions WITH refs, regions, counts - act from here). nav action=back|forward|reload; nav newTab=true url= opens a new tab. Cookie/consent banners are auto-dismissed on nav (surfaced as a consent: line in the orientation; --no-cookie-dismiss disables). (2) Look around -> see level=brief (re-orient, ~50 tok) | refs (interactive list with refs) | text (visible body) | outline (semantic skeleton - headings/tables/lists/forms/regions each with a WORKING css selector - use this to pick selectors for js) | full (refs+text) | shot (screenshot). (3) Do something -> act. Name the control (intent=\"Sign in\") OR give a ref/selector. act clicks buttons/links, fills inputs (value=), selects dropdowns (value=, by value or visible text) - verb picked from role+value. Add hover=true to hover, key=Enter to press a key (ref/intent to target it; Enter submits), files=[..] to upload. Optional waitUrl=/waitText=/waitGone= fuses a wait into the action. Returns a VERDICT + DELTA - you usually do NOT re-see after. For LOG IN to a site: login username= password= url= (url optional; logs in on the current page if omitted) does the whole form dance in ONE call - detects username/password/submit, handles single-step AND multi-step (password appears after Next, e.g. Google/Microsoft), and reports a STATE-VERIFIED verdict (logged in | 2FA/mfa needed | CHALLENGE | error: <msg> | still on login page | no login form found + SSO buttons listed); it never auto-clicks OAuth (use act for SSO). (4) Get data -> js. Run JS with helpers, return JSON: return {stars: text('#stars'), lang: attr('.lang','aria-label'), items: $$('li').map(text)}. Helpers: $(sel), $$(sel)->array, text(x), attr(x,name), html(x), visible(x), data(x,k), table(sel)->rows, links(sel)->[{text,href}], rect(x), xpath(xp), frame(title)->iframe doc, wait(fn,ms). await=sel waits first. One call, clean JSON, no re-snapshot. The go-to for ANY structured/scattered data; also computed styles, cookies, localStorage, canvas, console errors. (5) Find a control -> find role=/text= -> refs (pass to act ref=); find selector=\"css\" -> [css] lines with sel= (pass to js or act selector=); selectors=true also gives css sels for a11y matches. (6) Tabs -> tabs action=list|switch|close id= label=. (7) Lost your place -> history (last=N, errors=true for blocked/failed) or see brief. (8) Stuck (wedge/challenge/stale) -> session mode=reset (relaunch) or mode=clear (wipe cookies+storage+reload). RULES: refs are STABLE - same element keeps its ref across re-renders; a ref only errors if the element is actually gone; refs are per-tab, cleared on navigation. Verdicts: navigated / dialog opened / status / changed / page updated / no visible effect / CHALLENGE; non-nav actions fold in the XHRs that fired (net:). Every op is bounded by an op timeout (default 30s) so a hung page errors instead of wedging. js disabled if started with --no-eval. For hard anti-bot: --headless=false + --proxy-server.",
+		Instructions: "goshawk v3: 9 tools for agent browser automation. Dense a11y-tree snapshots (ref-lines, not aria dumps), intent-first actions, a verdict on every action, and a JS helper API for structured data. No per-call LLM. DECISION TREE: (1) Enter a page -> nav url= (returns an orientation: page type, auth, the top primary actions WITH refs, regions, counts - act from here). nav action=back|forward|reload; nav newTab=true url= opens a new tab. Cookie/consent banners are auto-dismissed on nav (surfaced as a consent: line in the orientation; --no-cookie-dismiss disables). (2) Look around -> see level=brief (re-orient, ~50 tok) | refs (interactive list with refs) | text (visible body) | outline (semantic skeleton - headings/tables/lists/forms/regions each with a WORKING css selector - use this to pick selectors for js) | full (refs+text) | shot (screenshot). (3) Do something -> act. Name the control (intent=\"Sign in\") OR give a ref/selector. act clicks buttons/links, fills inputs (value=), selects dropdowns (value=, by value or visible text) - verb picked from role+value. Add hover=true to hover, key=Enter to press a key (ref/intent to target it; Enter submits), files=[..] to upload. Optional waitUrl=/waitText=/waitGone= fuses a wait into the action. Returns a VERDICT + DELTA - you usually do NOT re-see after. For LOG IN to a site: login username= password= url= (url optional; logs in on the current page if omitted) does the whole form dance in ONE call - detects username/password/submit, handles single-step AND multi-step (password appears after Next, e.g. Google/Microsoft), and reports a STATE-VERIFIED verdict (logged in | 2FA/mfa needed | CHALLENGE | error: <msg> | still on login page | no login form found + SSO buttons listed); it never auto-clicks OAuth (use act for SSO). (4) Get data -> js. Run JS with helpers, return JSON: return {stars: text('#stars'), lang: attr('.lang','aria-label'), items: $$('li').map(text)}. Helpers: $(sel), $$(sel)->array, text(x), attr(x,name), html(x), visible(x), data(x,k), table(sel)->rows, links(sel)->[{text,href}], rect(x), xpath(xp), frame(title)->iframe doc, wait(fn,ms). await=sel waits first. One call, clean JSON, no re-snapshot. The go-to for ANY structured/scattered data; also computed styles, cookies, localStorage, canvas, console errors. (5) Find a control -> find role=/text= -> refs (pass to act ref=); find selector=\"css\" -> [css] lines with sel= (pass to js or act selector=); selectors=true also gives css sels for a11y matches. (6) Tabs -> tabs action=list|switch|close id= label=. (7) Lost your place -> history (last=N, errors=true for blocked/failed) or see brief. (8) Stuck (wedge/challenge/stale) -> session mode=reset (relaunch) or mode=clear (wipe cookies+storage+reload). RULES: refs are STABLE - same element keeps its ref across re-renders; a ref only errors if the element is actually gone; refs are per-tab, cleared on navigation. Verdicts: navigated / dialog opened / status / changed / page updated / no visible effect / CHALLENGE; non-nav actions fold in the XHRs that fired (net:). Every op is bounded by an op timeout (default 30s) so a hung page errors instead of wedging. js disabled if started with --no-eval. For hard anti-bot: --headless=false + --proxy-server.",
 	}
 	srv, err := mcpserver.New(sess, opts)
 	if err != nil {
@@ -155,7 +155,7 @@ func runDebug() {
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *versionFlag {
-		fmt.Println("agent-browser", versionString())
+		fmt.Println("goshawk", versionString())
 		return
 	}
 

@@ -4,7 +4,7 @@
   <text x="520" y="62" text-anchor="middle" fill="#A78BFA" font-size="13">same real task, each tool's natural flow, all three succeed</text>
 
   <!-- scale: max 1714 -> 540px, bars start x=270 -->
-  <text x="260" y="143" text-anchor="end" fill="#F5E8FF" font-size="14" font-weight="600">agent-browser v2</text>
+  <text x="260" y="143" text-anchor="end" fill="#F5E8FF" font-size="14" font-weight="600">goshawk v2</text>
   <rect x="270" y="122" width="49" height="34" fill="#2DD4BF"/>
   <text x="327" y="144" fill="#2DD4BF" font-size="14" font-weight="700">~154 tok</text>
 

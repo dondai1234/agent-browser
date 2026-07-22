@@ -1,6 +1,6 @@
 # --- build artifacts ---
-/agent-browser
-/agent-browser.exe
+/goshawk
+/goshawk.exe
 /dist/
 *.log
 *.exe

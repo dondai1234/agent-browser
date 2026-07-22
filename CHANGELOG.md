@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **agent-browser** are documented here.
+All notable changes to **goshawk** are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -201,7 +201,7 @@ A live head-to-head vs charlotte surfaced three improvements.
 
 - `bench/successtoken`: task-success-per-token benchmark. 5 multi-step tasks vs
   `@playwright/mcp` with a deterministic scripted agent. Both 5/5 success;
-  agent-browser 1,142 tokens vs playwright-mcp 2,337 tokens (~2x fewer at equal
+  goshawk 1,142 tokens vs playwright-mcp 2,337 tokens (~2x fewer at equal
   success).
 
 ## [2.0.9] - 2026-06-22
@@ -331,24 +331,24 @@ Single static binary, cross-platform.
   `hover` triggers CSS `:hover` and JS mouseover.
 - Persistence on by default (`--no-persist`): a Chrome profile keeps
   logins/cookies/localStorage across restarts.
-- One binary, 2-command install: `go install .../cmd/agent-browser@latest`.
+- One binary, 2-command install: `go install .../cmd/goshawk@latest`.
 - URL scheme allowlist, JS-dialog auto-accept, crash-aware AX rebuild, session
   mutex, `govulncheck` clean. Cross-platform: windows/amd64, linux/amd64+arm64,
   darwin/amd64+arm64.
 
-[Unreleased]: https://github.com/dondai1234/agent-browser/compare/v3.2.0...HEAD
-[3.2.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.2.0
-[3.1.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.1.0
-[3.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v3.0.0
-[2.4.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.4.0
-[2.2.2]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.2
-[2.2.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.1
-[2.2.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.2.0
-[2.1.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.1.1
-[2.1.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.1.0
-[2.0.9]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.9
-[2.0.3]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.3
-[2.0.2]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.2
-[2.0.1]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.1
-[2.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v2.0.0
-[1.0.0]: https://github.com/dondai1234/agent-browser/releases/tag/v1.0.0
+[Unreleased]: https://github.com/dondai1234/goshawk/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.2.0
+[3.1.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.1.0
+[3.0.0]: https://github.com/dondai1234/goshawk/releases/tag/v3.0.0
+[2.4.0]: https://github.com/dondai1234/goshawk/releases/tag/v2.4.0
+[2.2.2]: https://github.com/dondai1234/goshawk/releases/tag/v2.2.2
+[2.2.1]: https://github.com/dondai1234/goshawk/releases/tag/v2.2.1
+[2.2.0]: https://github.com/dondai1234/goshawk/releases/tag/v2.2.0
+[2.1.1]: https://github.com/dondai1234/goshawk/releases/tag/v2.1.1
+[2.1.0]: https://github.com/dondai1234/goshawk/releases/tag/v2.1.0
+[2.0.9]: https://github.com/dondai1234/goshawk/releases/tag/v2.0.9
+[2.0.3]: https://github.com/dondai1234/goshawk/releases/tag/v2.0.3
+[2.0.2]: https://github.com/dondai1234/goshawk/releases/tag/v2.0.2
+[2.0.1]: https://github.com/dondai1234/goshawk/releases/tag/v2.0.1
+[2.0.0]: https://github.com/dondai1234/goshawk/releases/tag/v2.0.0
+[1.0.0]: https://github.com/dondai1234/goshawk/releases/tag/v1.0.0

@@ -37,7 +37,7 @@ Each task has a script per tool (their surfaces differ). The runner just calls
 ## Run
 
 ```bash
-# agent-browser only (fast; builds the binary from source):
+# goshawk only (fast; builds the binary from source):
 go run ./bench/successtoken/
 
 # head-to-head vs playwright-mcp (needs npx + downloads @playwright/mcp on first
@@ -48,14 +48,14 @@ go run ./bench/successtoken/ -compare
 go run ./bench/successtoken/ -compare -list
 
 # use a prebuilt binary + a longer per-runner budget:
-go run ./bench/successtoken/ -compare -bin ./agent-browser -timeout 10m
+go run ./bench/successtoken/ -compare -bin ./goshawk -timeout 10m
 ```
 
-## Results (2026-06-23, agent-browser v2.1 vs @playwright/mcp latest)
+## Results (2026-06-23, goshawk v2.1 vs @playwright/mcp latest)
 
 Both tools: **5/5 (100%) task success.**
 
-| task | agent-browser | playwright-mcp | ratio |
+| task | goshawk | playwright-mcp | ratio |
 |---|---|---|---|
 | login | 207 tok (5 steps) | 380 tok (6 steps) | 1.84x |
 | search-extract | 152 tok (4 steps) | 361 tok (4 steps) | 2.38x |
@@ -66,11 +66,11 @@ Both tools: **5/5 (100%) task success.**
 
 Same success rate, ~half the tool-I/O tokens. The win comes from two places:
 
-1. **Intent-first `act`.** agent-browser resolves a control by name and acts in
+1. **Intent-first `act`.** goshawk resolves a control by name and acts in
    one call (`act "Username" value="alice"` returns a one-line verdict). The
    playwright-mcp path is snapshot -> type -> snapshot per action, because it
    needs a fresh snapshot's refs to address an element.
-2. **Dense output.** agent-browser's `read`/delta are compact text; the
+2. **Dense output.** goshawk's `read`/delta are compact text; the
    playwright-mcp `browser_snapshot` is a YAML accessibility tree with a page
    header and nested structure, so each read costs more chars.
 
@@ -82,7 +82,7 @@ multi-step tasks where the cost compounds over a flow, not a single snapshot.
 - Tokens are chars/4 (the standard rough ratio). The absolute number is an
   estimate; the **ratio** between tools is what's meaningful and is exact (same
   fixtures, same assertions, deterministic scripts).
-- Each tool uses its own efficient path (agent-browser's `act`+`read`;
+- Each tool uses its own efficient path (goshawk's `act`+`read`;
   playwright-mcp's `snapshot`+`type`+`click`). That is the point: we measure each
   tool the way an agent would actually use it, not a contrived equal-call-count
   script.

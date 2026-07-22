@@ -85,8 +85,8 @@ func realWorldSetupWithFlags(t *testing.T, extraArgs ...string) (*mcp.ClientSess
 		t.Skip("set AGENT_BROWSER_INTEGRATION=1 to run (needs Chrome + network)")
 	}
 	root := findModuleRoot(t)
-	bin := filepath.Join(t.TempDir(), "agent-browser-v3.exe")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/agent-browser")
+	bin := filepath.Join(t.TempDir(), "goshawk-v3.exe")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/goshawk")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)

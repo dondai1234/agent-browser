@@ -30,24 +30,24 @@ var tasks []task
 func init() {
 	tasks = []task{
 		{name: "login", scripts: map[string]func(callFunc, string) error{
-			"agent-browser":   taskLoginAB,
-			"playwright-mcp":  taskLoginPW,
+			"goshawk":        taskLoginAB,
+			"playwright-mcp": taskLoginPW,
 		}},
 		{name: "search-extract", scripts: map[string]func(callFunc, string) error{
-			"agent-browser":   taskSearchAB,
-			"playwright-mcp":  taskSearchPW,
+			"goshawk":        taskSearchAB,
+			"playwright-mcp": taskSearchPW,
 		}},
 		{name: "form-submit", scripts: map[string]func(callFunc, string) error{
-			"agent-browser":   taskFormAB,
-			"playwright-mcp":  taskFormPW,
+			"goshawk":        taskFormAB,
+			"playwright-mcp": taskFormPW,
 		}},
 		{name: "multi-page-nav", scripts: map[string]func(callFunc, string) error{
-			"agent-browser":   taskNavAB,
-			"playwright-mcp":  taskNavPW,
+			"goshawk":        taskNavAB,
+			"playwright-mcp": taskNavPW,
 		}},
 		{name: "lazy-list-scroll", scripts: map[string]func(callFunc, string) error{
-			"agent-browser":   taskListAB,
-			"playwright-mcp":  taskListPW,
+			"goshawk":        taskListAB,
+			"playwright-mcp": taskListPW,
 		}},
 	}
 }
@@ -66,7 +66,7 @@ func assert(cond bool, msg string) error {
 	return nil
 }
 
-// --- agent-browser task scripts (the v2 efficient path: act + read + scroll) ---
+// --- goshawk task scripts (the v2 efficient path: act + read + scroll) ---
 // These deliberately use the intent-first act tool (one call = resolve + act +
 // verdict) + read, the path the v2 thesis claims is token-cheap. No find/see
 // round-trips unless needed.
@@ -175,7 +175,7 @@ func taskListAB(run callFunc, base string) error {
 
 func pwRef(snap, label string) string {
 	// playwright-mcp snapshot lines look like: - textbox "Username" [ref=e3].
-	// Headings/generic containers ALSO get refs in pw (unlike agent-browser), so a
+	// Headings/generic containers ALSO get refs in pw (unlike goshawk), so a
 	// label substring like "Search" can match the heading "Search products"
 	// before the real control. Skip non-interactive roles so we always land on a
 	// typeable/clickable element.
@@ -242,7 +242,7 @@ func taskSearchPW(run callFunc, base string) error {
 		return errFail("pw: no Search ref")
 	}
 	// browser_type submit:true types + presses Enter, which the fixture's keydown
-	// handler renders results on (one call vs agent-browser's act + press_key).
+	// handler renders results on (one call vs goshawk's act + press_key).
 	if _, err := run("browser_type", map[string]any{"target": q, "text": "shoes", "submit": true}); err != nil {
 		return err
 	}
@@ -360,7 +360,7 @@ func oneLine(s string) string {
 
 func main() {
 	compare := flag.Bool("compare", false, "also run the playwright-mcp head-to-head (needs npx + @playwright/mcp; auto-installs on first run)")
-	bin := flag.String("bin", "", "path to a prebuilt agent-browser binary; if empty, builds one to a temp path")
+	bin := flag.String("bin", "", "path to a prebuilt goshawk binary; if empty, builds one to a temp path")
 	timeout := flag.Duration("timeout", 5*time.Minute, "per-runner wall-clock budget")
 	list := flag.Bool("list", false, "list each runner's tools + their input schema properties, then exit (no tasks run)")
 	flag.Parse()
@@ -368,12 +368,12 @@ func main() {
 	fx := newFixtures()
 	defer fx.Close()
 
-	// Build (or locate) the agent-browser binary.
+	// Build (or locate) the goshawk binary.
 	abBin := *bin
 	if abBin == "" {
 		tmp, err := buildBinary()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "build agent-browser: %v\n", err)
+			fmt.Fprintf(os.Stderr, "build goshawk: %v\n", err)
 			os.Exit(1)
 		}
 		abBin = tmp
@@ -381,13 +381,13 @@ func main() {
 	}
 
 	runners := []runner{
-		{name: "agent-browser", command: []string{abBin, "mcp", "--no-persist"}},
+		{name: "goshawk", command: []string{abBin, "mcp", "--no-persist"}},
 	}
 	if *compare {
 		runners = append(runners, runner{name: "playwright-mcp", command: []string{"npx", "-y", "@playwright/mcp@latest", "--headless"}})
 		toolOrder = append(toolOrder, "playwright-mcp")
 	}
-	toolOrder = append([]string{"agent-browser"}, toolOrder...)
+	toolOrder = append([]string{"goshawk"}, toolOrder...)
 
 	if *list {
 		for _, r := range runners {
@@ -473,12 +473,12 @@ func connectRunnerCounted(ctx context.Context, r runner, chars *int) (callFunc, 
 }
 
 func buildBinary() (string, error) {
-	tmp, err := os.CreateTemp("", "agent-browser-bench-*.exe")
+	tmp, err := os.CreateTemp("", "goshawk-bench-*.exe")
 	if err != nil {
 		return "", err
 	}
 	tmp.Close()
-	cmd := exec.Command("go", "build", "-o", tmp.Name(), "./cmd/agent-browser")
+	cmd := exec.Command("go", "build", "-o", tmp.Name(), "./cmd/goshawk")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -491,7 +491,7 @@ func buildBinary() (string, error) {
 // listTools connects to a runner's MCP server, lists its tools, and prints each
 // tool's required + optional input properties (the JSON schema fields), so we
 // can verify the exact arg names/shape before writing task scripts for a tool
-// whose surface differs from agent-browser's.
+// whose surface differs from goshawk's.
 func listTools(r runner) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

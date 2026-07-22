@@ -5,14 +5,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug. agent-browser is judged on real
+        Thanks for taking the time to file a bug. goshawk is judged on real
         sites, so include the exact page and the actual tool output.
   - type: input
     id: version
     attributes:
-      label: agent-browser version
-      description: Output of `agent-browser --version`
-      placeholder: "agent-browser v3.2.0"
+      label: goshawk version
+      description: Output of `goshawk --version`
+      placeholder: "goshawk v3.2.0"
     validations:
       required: true
   - type: input

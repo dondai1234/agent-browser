@@ -20,7 +20,7 @@ Security tab). Do **not** open a public issue for a security problem.
 Include:
 
 - A description of the issue and its impact.
-- The version you tested (`agent-browser --version`).
+- The version you tested (`goshawk --version`).
 - A minimal reproduction (config + steps).
 
 You'll get an acknowledgement within a few days. Please give reasonable notice
@@ -28,7 +28,7 @@ before any public disclosure so a fix can ship first.
 
 ## Scope
 
-agent-browser drives a local Chrome/Chromium instance over the Chrome DevTools
+goshawk drives a local Chrome/Chromium instance over the Chrome DevTools
 Protocol. It runs arbitrary page JavaScript via the `js` tool (disable with
 `--no-eval`) and auto-accepts JS dialogs by design. Treat the MCP server as a
 trusted local process: any MCP client that can call it can execute page JS in

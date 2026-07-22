@@ -1,6 +1,6 @@
-# Contributing to agent-browser
+# Contributing to goshawk
 
-Thanks for your interest in improving agent-browser. This is a small, focused
+Thanks for your interest in improving goshawk. This is a small, focused
 project; the bar is "works on real sites, fewer tokens, clearer tool defs."
 
 ## Before you start
@@ -14,8 +14,8 @@ in progress.
 Requires [Go](https://go.dev) 1.26+ and Chrome/Chromium (auto-discovered).
 
 ```sh
-git clone https://github.com/dondai1234/agent-browser.git
-cd agent-browser
+git clone https://github.com/dondai1234/goshawk.git
+cd goshawk
 go build ./...          # must compile on windows/linux/macos
 go vet ./...
 go test ./...           # unit tests; integration tests self-skip without Chrome

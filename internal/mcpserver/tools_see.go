@@ -6,8 +6,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/agent-browser/v3/internal/browser"
-	"github.com/dondai1234/agent-browser/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v3/internal/snapshot"
 )
 
 func registerSee(srv *mcp.Server, sess *browser.Session) {

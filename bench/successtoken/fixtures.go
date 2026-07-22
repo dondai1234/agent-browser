@@ -1,4 +1,4 @@
-// Package main is the task-success-per-token benchmark for agent-browser.
+// Package main is the task-success-per-token benchmark for goshawk.
 //
 // Snapshot size is the easy number; task success per token is the honest one.
 // This harness runs a set of multi-step browser tasks (login, search+extract,
@@ -7,7 +7,7 @@
 //
 //   - success: did the task's end-state assertion pass?
 //   - tokens:  total tool I/O chars (sent args JSON + returned text) / 4, the
-//              cost an LLM agent burns on tool round-trips for that task
+//     cost an LLM agent burns on tool round-trips for that task
 //
 // The "agent" is a deterministic scripted policy, NOT an LLM. This is deliberate:
 // token cost is the tool surface (inputs + outputs), independent of which model
@@ -173,12 +173,18 @@ func report(results []taskResult) {
 	b.WriteString("\n=== task success per token ===\n")
 	b.WriteString(fmt.Sprintf("%-22s %-14s %-10s %6s %8s %6s\n", "task", "tool", "result", "steps", "chars", "tokens"))
 	b.WriteString(strings.Repeat("-", 70) + "\n")
-	totals := map[string]*struct{ succ, chars int; tasks int }{}
+	totals := map[string]*struct {
+		succ, chars int
+		tasks       int
+	}{}
 	for _, r := range results {
 		b.WriteString(fmt.Sprintf("%-22s %-14s %-10s %6d %8d %6.0f\n", r.Task, r.Tool, boolStr(r.Success, r.Err), r.Steps, r.Chars, r.Tokens))
 		t, ok := totals[r.Tool]
 		if !ok {
-			t = &struct{ succ, chars int; tasks int }{}
+			t = &struct {
+				succ, chars int
+				tasks       int
+			}{}
 			totals[r.Tool] = t
 		}
 		t.tasks++
