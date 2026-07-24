@@ -29,6 +29,14 @@ func (s *Session) resolveBackendLocked(ctx context.Context, backend int64, ref s
 	return r.ObjectID, nil
 }
 
+// tabURLLocked returns the current URL of the tab without rebuilding the tree.
+// Caller must hold s.mu.
+func (s *Session) tabURLLocked(t *tab) string {
+	var u string
+	_ = s.run(t, chromedp.Location(&u))
+	return u
+}
+
 // NavigateAndSee navigates the current tab and returns its new tree. Atomic.
 func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
 	clean, err := ValidateURL(raw, s.AllowInsecureSchemes)
@@ -97,12 +105,74 @@ func (s *Session) navigateLocked(clean string) (*snapshot.Tree, error) {
 			cur.tree.Overlay = overlayVerdict
 		}
 	}
+	// Recover from consent redirects (cookie/GDPR/privacy pages). Some sites
+	// (especially EU-targeted) redirect to a consent page on first visit. The
+	// overlay dismissal above tries to click accept/reject, but the click may
+	// not complete the consent flow (synthetic events, cross-domain cookies,
+	// async redirects). If we detect a consent redirect:
+	//   1. Wait for any post-click navigation (the dismiss may redirect back).
+	//   2. If still on consent page, re-navigate to the original URL.
+	//   3. If re-navigation also redirects, try a broader page-level dismiss.
+	//   4. After broader dismiss, wait + re-navigate one final time.
+	//   5. If still redirected, report it clearly so the agent can act.
+	if cur.tree.Challenge == "" && isConsentRedirect(clean, cur.tree.URL) {
+		// 1. Wait for post-click navigation.
+		time.Sleep(500 * time.Millisecond)
+		postURL := s.tabURLLocked(t)
+		if postURL != "" && !isConsentRedirect(clean, postURL) && postURL != cur.tree.URL {
+			// Dismiss triggered a redirect back (or elsewhere). Rebuild tree.
+			if err := s.buildTreeLocked(); err == nil {
+				cur = s.curTabLocked()
+			}
+		} else if isConsentRedirect(clean, postURL) || postURL == "" {
+			// 2. Still on consent page. Re-navigate to the original URL.
+			if err := s.run(t, chromedp.Navigate(clean), chromedp.WaitReady("body", chromedp.ByQuery)); err == nil {
+				if err := s.buildTreeLocked(); err == nil {
+					cur = s.curTabLocked()
+				}
+			}
+			if isConsentRedirect(clean, cur.tree.URL) {
+				// 3. Re-navigation still redirected. Try broader page-level dismiss.
+				if label := s.dismissConsentPageLocked(cur); label != "" {
+					if overlayVerdict != "" {
+						overlayVerdict += "; " + label
+					} else {
+						overlayVerdict = label
+					}
+				}
+				// 4. Wait for post-click navigation.
+				time.Sleep(1 * time.Second)
+				postURL2 := s.tabURLLocked(t)
+				if postURL2 == "" || isConsentRedirect(clean, postURL2) {
+					// 5. Final re-navigate.
+					if err := s.run(t, chromedp.Navigate(clean), chromedp.WaitReady("body", chromedp.ByQuery)); err == nil {
+						if err := s.buildTreeLocked(); err == nil {
+							cur = s.curTabLocked()
+						}
+					}
+				} else {
+					// Broader dismiss triggered a redirect. Rebuild tree.
+					if err := s.buildTreeLocked(); err == nil {
+						cur = s.curTabLocked()
+					}
+				}
+			}
+		}
+		if overlayVerdict != "" {
+			cur.tree.Overlay = overlayVerdict
+		}
+	}
 	navVerdict := fmt.Sprintf("navigated to %s", cur.tree.URL)
 	if cur.tree.Title != "" {
 		navVerdict += fmt.Sprintf(" %q", cur.tree.Title)
 	}
 	if cur.tree.Challenge != "" {
 		navVerdict = "CHALLENGE: " + cur.tree.Challenge
+	} else if isConsentRedirect(clean, cur.tree.URL) {
+		navVerdict = fmt.Sprintf("CONSENT REDIRECT: %s -> %s (auto-dismiss did not complete the consent flow; try act intent=\"Accept\" to click the consent button manually, or js to set the consent cookie)", clean, cur.tree.URL)
+		if overlayVerdict != "" {
+			navVerdict += "; " + overlayVerdict
+		}
 	} else if overlayVerdict != "" {
 		navVerdict += "; " + overlayVerdict
 	}

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 
@@ -128,6 +129,97 @@ const dismissOverlaysJS = `(() => {
   }
   return '';
 })()`
+
+// consentRedirectRE matches URL paths that look like consent/cookie/privacy
+// redirect targets (e.g. meta.wikimedia.org/wiki/Privacy_policy/cookie-statement,
+// consent.example.com, example.com/cookie-notice).
+var consentRedirectRE = regexp.MustCompile(`cookie|consent|privacy|gdpr|cmp|notice|opt-?out`)
+
+// isConsentRedirect reports whether currentURL looks like a consent/cookie
+// redirect of originalURL. True when the URLs differ and the current URL
+// contains consent-related keywords while the original does not. This catches
+// the common EU/GDPR pattern: navigate to site.com/page -> redirected to
+// consent.site.com/cookie-policy or site.com/privacy/cookies.
+func isConsentRedirect(originalURL, currentURL string) bool {
+	if currentURL == "" || originalURL == "" {
+		return false
+	}
+	ou := strings.ToLower(stripQueryFragment(originalURL))
+	cu := strings.ToLower(stripQueryFragment(currentURL))
+	if ou == cu {
+		return false
+	}
+	return consentRedirectRE.MatchString(cu) && !consentRedirectRE.MatchString(ou)
+}
+
+// stripQueryFragment removes the query string and fragment from a URL for
+// keyword matching (so a redirect to site.com/page?consent=true is detected
+// by the path, not the query).
+func stripQueryFragment(u string) string {
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		return u[:i]
+	}
+	return u
+}
+
+// dismissConsentPageJS is a broader consent dismiss for full-page consent
+// statements (not banner overlays). When isConsentRedirect confirms we're on
+// a consent page, this searches the ENTIRE page (not just banner containers)
+// for short-text accept/reject buttons and clicks the best match. The text
+// length cap (< 50 chars) prevents matching paragraph text that happens to
+// contain "accept" or "continue".
+const dismissConsentPageJS = `(() => {
+  const CLICKABLE = 'button, [role="button"], a[href], input[type="submit"], input[type="button"]';
+  const REJECT = /reject|decline|deny|refuse|disagree|opt ?out|no thanks?|only necessary|essential|necessary only|do not accept|do not sell/i;
+  const ACCEPT = /accept|agree|allow|consent|got it|continue|proceed|yes|^ok$/i;
+  const visible = (el) => {
+    if (!el || !el.isConnected) return false;
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  const text = (el) => {
+    const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const a = [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('value')].filter(Boolean).join(' ').toLowerCase();
+    return (t + ' ' + a).trim();
+  };
+  const all = [...document.querySelectorAll(CLICKABLE)].filter(visible);
+  // Prefer reject (privacy-correct + banner won't reappear).
+  for (const el of all) {
+    const t = text(el);
+    if (REJECT.test(t) && t.length < 50) { try { el.click(); } catch(e) {} return 'rejected consent (page)'; }
+  }
+  // Fallback to accept.
+  for (const el of all) {
+    const t = text(el);
+    if (ACCEPT.test(t) && t.length < 50) { try { el.click(); } catch(e) {} return 'accepted consent (page)'; }
+  }
+  return '';
+})()`
+
+// dismissConsentPageLocked runs the broader page-level consent dismiss. Only
+// called when isConsentRedirect confirms we're on a consent page, so false
+// positives are unlikely. Caller must hold s.mu.
+func (s *Session) dismissConsentPageLocked(t *tab) string {
+	if s.cfg.NoOverlayDismiss || t == nil {
+		return ""
+	}
+	var label string
+	_ = s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+		res, exc, err := runtime.Evaluate(dismissConsentPageJS).WithReturnByValue(true).Do(ctx)
+		if err != nil || exc != nil {
+			return nil
+		}
+		if res != nil && len(res.Value) > 0 {
+			var s2 string
+			_ = json.Unmarshal(res.Value, &s2)
+			label = strings.TrimSpace(s2)
+		}
+		return nil
+	}))
+	return label
+}
 
 // dismissOverlaysLocked runs the cookie/consent dismissal once on the current
 // tab. Returns a short label ("" if no banner was found/dismissed). Caller must
