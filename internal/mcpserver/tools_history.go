@@ -15,7 +15,7 @@ func registerHistory(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "history",
-		Description: "The session action log (offloaded from your context). Every act/nav records a step: action, verdict, url. Query it to re-orient after a long flow instead of carrying the transcript. errors=true shows only blocked (CHALLENGE) or failed actions; last=N limits to the most recent N. Step numbers are monotonic across the whole session so you can reference them stably.",
+		Description: "Session action log - re-orient after a long flow without carrying the transcript. Every act/nav records a step. errors=true for failures only, last=N for recent N.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		last := a.Last // 0 = all

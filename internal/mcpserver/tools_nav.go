@@ -22,7 +22,7 @@ func registerNav(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "nav",
-		Description: "Navigate and return an orientation, so you can act immediately without a separate see. action=open (default) opens url on the current tab; back/forward traverse browser history; reload re-fetches the current page. newTab=true opens url in a new tab (makes it current; pass label= to name it). back/forward with no history is a no-op (returns the current page). waitSelector= waits for a CSS selector to appear before building the tree (native waitForSelector for slow SPAs, e.g. waitSelector=\"#content\" or \"input[name=email]\"; times out after 10s). Default level=brief: page type, auth state, the top primary actions WITH refs (e.g. 'r3 button \"Login\"'), regions, interactive counts - act from here. Use level=refs for the full interactive list, level=full to also see text. Every nav detects bot-check interstitials (Cloudflare/captcha) and surfaces CHALLENGE:. Blank pages (no interactive elements) are detected and reported clearly as BLANK PAGE.",
+		Description: "Navigate to a URL and get an orientation back - page type, auth, primary actions WITH refs, counts. Act from here without calling see. Auto-dismisses cookie banners, auto-recovers consent redirects, detects CHALLENGE and BLANK PAGE. waitSelector= waits for a CSS selector before returning (slow SPAs). back/forward/reload for history; newTab=true opens a new tab.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		action := strings.ToLower(strings.TrimSpace(a.Action))

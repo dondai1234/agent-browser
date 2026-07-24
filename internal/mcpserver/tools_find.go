@@ -22,7 +22,7 @@ func registerFind(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "find",
-		Description: "Locate elements to act on or scrape. Two modes: (1) a11y - role= and/or text= filter the cached snapshot -> elements with refs (pass to act ref=) AND names; reach into same-origin iframes (shown with 'in \"frame\"'). exact=true matches the name exactly (avoids 'more' matching '...more than...'). (2) selector=\"<css>\" - query the DOM directly -> [css] lines with a sel= you pass to js or act selector=; the escape hatch for elements the a11y tree drops (custom widgets, presentational nodes). selectors=true (a11y mode) also computes a CSS selector per match so you can target the same element in js - the bridge between the ref world and the selector world. Omit role and text to list every interactive element (can be large - prefer a filter).",
+		Description: "Locate elements to act on or scrape. role= and/or text= filter the cached a11y snapshot -> elements with refs (pass to act ref=). selector=\"css\" queries the DOM directly for elements the a11y tree misses (custom widgets, presentational). exact=true for exact name match only. Omit both filters to list all interactive elements.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		if sel := strings.TrimSpace(a.Selector); sel != "" {

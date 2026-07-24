@@ -19,7 +19,7 @@ func registerSee(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "see",
-		Description: "Look at the current page without navigating. Pick the level that gives what you need: brief = one-glance comprehension (page type, auth, top primary actions with refs, regions, counts) - re-orient after a long flow; refs = the interactive element list with refs to pass to act; text = the visible body text (offset to paginate); outline = the semantic skeleton (headings/tables/lists/forms/regions) each with a WORKING css selector - use this when you're about to js-scrape and need the right selectors; full = refs + visible text; shot = a PNG screenshot (fullPage or ref) for visual layout a text snapshot can't capture. Reaches into same-origin iframes.",
+		Description: "Inspect the current page without navigating. Levels: brief (re-orient: type+auth+actions+refs+counts), refs (full interactive list with refs for act), text (visible body text), outline (semantic skeleton with CSS selectors for js), full (refs+text), shot (screenshot). Use outline before js-scraping to get the right selectors. Reaches into same-origin iframes.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		level := strings.ToLower(strings.TrimSpace(a.Level))

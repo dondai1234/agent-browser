@@ -19,7 +19,7 @@ func registerTabs(srv *mcp.Server, sess *browser.Session) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "tabs",
-		Description: "Manage tabs. action=list (default) lists every tab (id, label, url, title, current). switch id=t2 makes that tab current. close id=t2 closes it (the last tab cannot be closed). label label=\"admin\" names the current tab so you can switch to it by name later. Open a NEW tab with nav newTab=true.",
+		Description: "Manage tabs. action=list (default) shows all tabs with id/label/url/title. switch id=t2 changes the active tab. close id=t2 closes a tab. label= names the current tab. Open new tabs with nav newTab=true.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		action := strings.ToLower(strings.TrimSpace(a.Action))
