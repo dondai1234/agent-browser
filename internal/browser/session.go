@@ -139,7 +139,7 @@ type Session struct {
 // call holds the session mutex forever and EVERY tool then blocks on the lock
 // until the MCP client times out - the "session hung, all tools timed out"
 // failure. The bound turns a wedge into a normal error the agent can reset from.
-const opTimeoutDefault = 45 * time.Second
+const opTimeoutDefault = 20 * time.Second
 
 // axPollTimeout bounds each accessibility-tree pull (GetFullAXTree + the iframe
 // merge). AX pulls are fast on a live page; a pull that takes longer is almost
