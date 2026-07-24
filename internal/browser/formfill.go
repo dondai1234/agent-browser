@@ -122,11 +122,24 @@ func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormF
 
 	for _, label := range keys {
 		value := fields[label]
-		// 1. Resolve the field by intent (a11y name first, DOM fallback).
+		// 1. Resolve the field by intent: a11y name with value (prefers fillable
+		// roles: textbox/searchbox/spinbutton/combobox). When hasValue=true,
+		// resolveIntent SKIPS non-fillable roles (radio/checkbox/button/link) so
+		// a value-bearing "Search" intent finds the input, not the button.
 		resolved, candidates, rerr := resolveIntent(t.tree, label, value, "", 0)
+		// 2. If no fillable match, retry WITHOUT value to include ALL roles
+		// (radio, checkbox, switch, slider, button). This handles:
+		//   fields={"Subscribe": "true"}  -> checkbox named "Subscribe"
+		//   fields={" Small": "true"}     -> radio named "Small" (label is option)
+		//   fields={"Volume": "50"}       -> slider named "Volume"
+		// The role-specific action handler below already knows how to handle
+		// each type (toggle checkbox, click radio, set slider, fill text).
+		if rerr != nil && len(candidates) == 0 {
+			resolved, candidates, rerr = resolveIntent(t.tree, label, "", "", 0)
+		}
 		if rerr != nil {
-			// Try the DOM fallback directly.
 			if len(candidates) == 0 {
+				// 3. DOM fallback with value (finds fillable by name/id/placeholder).
 				domCand, _, domErr := s.resolveIntentDOMLocked(t, label, value, "", 0)
 				if domErr == nil {
 					_, actErr := s.actOnDOMLocked(t, domCand, value)
@@ -139,8 +152,35 @@ func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormF
 					time.Sleep(settle)
 					continue
 				}
-				// For radios: the label is the group name, the value is the
-				// option label. Try resolving the VALUE as a radio intent.
+				// 4. DOM fallback without value (finds clickable by attributes:
+				// radio/checkbox with name/id but no a11y name).
+				if domCand2, _, domErr2 := s.resolveIntentDOMLocked(t, label, "", "", 0); domErr2 == nil {
+					// For checkboxes: toggle to the desired state (form-fill
+					// semantics: value is truthy/falsy, not just a blind click).
+					if domCand2.Tag == "input" && domCand2.Type == "checkbox" {
+						actErr := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+							return s.formToggleCheckboxSelLocked(ctx, domCand2.Sel, value)
+						}))
+						if actErr != nil {
+							result.Errors = append(result.Errors, fmt.Sprintf("%q: %v", label, actErr))
+							lastErr = actErr.Error()
+						} else {
+							result.Filled++
+						}
+					} else {
+						_, actErr := s.actOnDOMLocked(t, domCand2, value)
+						if actErr != nil {
+							result.Errors = append(result.Errors, fmt.Sprintf("%q: %v", label, actErr))
+							lastErr = actErr.Error()
+						} else {
+							result.Filled++
+						}
+					}
+					time.Sleep(settle)
+					continue
+				}
+				// 5. Radio fallback: the label is the group name, the value is
+				// the option label. Try resolving the VALUE as a radio intent.
 				if radioEl, radioCands, radioErr := resolveIntent(t.tree, value, "", "radio", 0); radioErr == nil {
 					if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 						id, e := s.resolveRefLocked(ctx, radioEl.Ref)
@@ -332,4 +372,38 @@ func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormF
 // domSetFileInputFiles sets files on a file input by remote object id.
 func domSetFileInputFiles(ctx context.Context, id runtime.RemoteObjectID, paths []string) error {
 	return dom.SetFileInputFiles(paths).WithObjectID(id).Do(ctx)
+}
+
+// formToggleCheckboxSelLocked resolves a checkbox by CSS selector, reads its
+// current checked state, and clicks only if the desired state (from formTruthy)
+// differs from the current state. This is the form-fill-specific checkbox
+// handler for the DOM fallback path: actOnDOMLocked would blindly click
+// (toggle), but form fill needs to SET the checkbox to a specific state based
+// on the field value ("true"/"false"). Caller must hold s.mu.
+func (s *Session) formToggleCheckboxSelLocked(ctx context.Context, selector, value string) error {
+	selJSON, _ := json.Marshal(selector)
+	res, exc, err := runtime.Evaluate(`(function(){ return document.querySelector(` + string(selJSON) + `); })()`).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("checkbox resolve: %w", err)
+	}
+	if exc != nil {
+		return fmt.Errorf("checkbox resolve failed: %s", exc.Text)
+	}
+	if res == nil || res.ObjectID == "" {
+		return fmt.Errorf("checkbox selector %q not found", selector)
+	}
+	id := res.ObjectID
+	want := formTruthy(value)
+	checkedRes, _, e := runtime.CallFunctionOn(checkboxCheckedJS).WithReturnByValue(true).WithObjectID(id).Do(ctx)
+	if e != nil {
+		return fmt.Errorf("check state: %w", e)
+	}
+	currentlyChecked := false
+	if checkedRes != nil && len(checkedRes.Value) > 0 {
+		_ = json.Unmarshal(checkedRes.Value, &currentlyChecked)
+	}
+	if currentlyChecked == want {
+		return nil // already in desired state
+	}
+	return s.clickNodeLocked(ctx, id)
 }
