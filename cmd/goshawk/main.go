@@ -80,7 +80,7 @@ func runMCP(args []string) {
 	noCookieDismiss := fs.Bool("no-cookie-dismiss", false, "disable the cookie/consent banner auto-dismiss on navigate (on by default; frees the AX tree + clicks on real sites)")
 	allowInsecure := fs.Bool("allow-insecure-schemes", false, "allow file/javascript/data/about/blob URLs")
 	noEval := fs.Bool("no-eval", false, "disable the eval tool (arbitrary page JS; enabled by default)")
-	opTimeout := fs.Duration("op-timeout", 30*time.Second, "per-CDP-operation timeout: bounds any single browser call so a hung page returns an error instead of wedging the session (the 'all tools timed out' failure). Raise for very slow pages.")
+	opTimeout := fs.Duration("op-timeout", 20*time.Second, "per-CDP-operation timeout: bounds any single browser call so a hung page returns an error instead of wedging the session (the 'all tools timed out' failure). Raise for very slow pages.")
 	idleTimeout := fs.Duration("idle-timeout", 10*time.Minute, "auto-close Chrome after this long with no browser activity, so a one-shot use doesn't leave Chrome running for the whole session; the next navigate re-launches it (page state is lost - re-navigate). 0 disables auto-close.")
 	versionFlag := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(args)

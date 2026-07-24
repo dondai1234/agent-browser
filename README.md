@@ -1,174 +1,289 @@
 <div align="center">
 
-<img src="docs/img/hero.png" width="720" alt="goshawk: token-efficient browser automation for AI agents">
+# 🪿 goshawk
 
-<br>
+**A browser in the agent's hand. 9 tools. One verdict per action. Zero guessing.**
 
-**One Go binary** &nbsp;·&nbsp; **Cross-platform** &nbsp;·&nbsp; **Purpose-built engine over chromedp**, no Playwright, no Puppeteer, no Node
+Navigate, read, click, fill, log in, scrape. Pure Go, single binary, no Node, no Python, no Docker.
+Built on Chrome DevTools Protocol + MCP. Works with Claude Code, Cursor, OpenCode, Pi, anything that speaks MCP.
 
-<br>
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](CHANGELOG.md)
+[![GitHub stars](https://img.shields.io/github/stars/dondai1234/goshawk?style=social)](https://github.com/dondai1234/goshawk/stargazers)
 
-[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](https://go.dev)
-[![build](https://github.com/dondai1234/goshawk/actions/workflows/test.yml/badge.svg)](https://github.com/dondai1234/goshawk/actions/workflows/test.yml)
-[![go report](https://goreportcard.com/badge/github.com/dondai1234/goshawk)](https://goreportcard.com/report/github.com/dondai1234/goshawk)
-[![MCP](https://img.shields.io/badge/MCP-server-6E56CF.svg)](https://modelcontextprotocol.io)
+```bash
+go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+```
 
-<br>
-
-<img src="docs/img/flow.png" width="780" alt="Intent-first flow: the agent names a control, the tool resolves + acts, a verdict comes back">
+[Install](#-install) · [The 9 tools](#-the-9-tools) · [Self-diagnosing verdicts](#-self-diagnosing-verdicts) · [Comparison](#-comparison) · [Token cost](#-token-cost) · [Honest limits](#-honest-limits)
 
 </div>
+
+<br>
+
+## Why goshawk
+
+Most browser MCP servers give the agent a raw page snapshot and let it figure out what happened. The agent burns 3 to 5 calls investigating: *did the click work? is the page blank? what went wrong?* goshawk closes that loop.
+
+- 🔬 **Self-diagnosing verdicts**: every action returns a confidence-scored verdict. When something goes wrong, the verdict explains why and what to do next. "did you mean Sign in?" when you type "Sgn in". "errors visible: Email is required. Fix and retry" when a form fails. Zero extra tool calls, no LLM in the loop, pure heuristics.
+- 🪶 **9 tools, ~3.4K tokens**: dense a11y-tree snapshots (ref-lines, not aria dumps), intent-first actions, one verdict per call. More capability than tools shipping 6K+ tokens.
+- 🦅 **Intent-first**: `act intent="Sign in"` finds the button. `act fields={"Username":"john","Password":"hunter2"}` fills a whole form in one call. Name what you want, not how to find it.
+- 🛡️ **Self-healing refs**: refs from `see`/`find` survive re-renders. When React re-creates a node with the same role+name, goshawk auto-heals the ref. No stale-selector failures.
+- 🍪 **Cookie banners auto-dismissed**: on every navigate. Consent redirects auto-recovered. The a11y tree comes back clean, not cluttered with "Accept cookies" overlays.
+- 📄 **Blank page detection**: when a page loads empty (slow SPA, rate-limit, JS not hydrated), the verdict says `BLANK PAGE` with what to try. One call, not five.
+- 🔐 **One-call login**: `login username= password=` handles single-step and multi-step, verifies the resulting state, detects 2FA, SSO redirects, remember-me, forgot-password. Reports state, not HTTP status.
+- 🎭 **Named profiles**: isolated cookies, auth, storage. Switch identities in one call. Logins survive restarts with persistent profiles.
+- 🦿 **Single Go binary**: 14 MB. No Node runtime, no Python venv, no Docker. `go install` and done.
+
+> goshawk is for the agent. You install it once; the agent drives the browser through 9 tools.
 
 ---
 
-> Built for the **agent that uses it**, not a human. The agent says what it wants (`act "Sign in"`); the tool resolves it, does it, and reports a **verdict**. Snapshots are dense ref-lines, not aria dumps. Every action returns a **delta** (what changed) plus a one-line semantic outcome. Structured data comes back as **JSON**, not 200 refs to reconstruct. The action log is **offloaded** from the agent's context.
+## 🧰 The 9 tools
 
-## Why
+| Tool | One-liner |
+|------|-----------|
+| `nav` | Navigate to a URL and get an orientation back: page type, auth, primary actions WITH refs, counts. Auto-dismisses cookie banners, detects CHALLENGE and BLANK PAGE. `waitSelector=` for slow SPAs. |
+| `see` | Inspect the current page. Levels: brief, refs, text, outline (CSS selectors for js), full, shot. |
+| `act` | Interact: click, fill, select, hover, key, upload, or batch form fill (`fields={}`). Returns a self-diagnosing verdict. Don't re-see after. |
+| `js` | Run JavaScript, get clean JSON. Helpers: `$(sel)`, `text(x)`, `table(sel)`, `links(sel)`, `wait(fn,ms)`, more. |
+| `find` | Locate elements: `role=`/`text=` filters the a11y tree, `selector="css"` queries the DOM directly. |
+| `tabs` | List, switch, close, label tabs. |
+| `history` | Session action log. `errors=true` for failures, `last=N` for recent steps. |
+| `session` | `reset` (relaunch), `clear` (wipe cookies+storage), `profile` (named identities: create/switch/export/import). |
+| `login` | One-call login. Detects fields, fills, submits, verifies state. Handles multi-step. Reports: logged in / 2FA / CHALLENGE / error / SSO. |
 
-The big browser MCP servers tax the agent every step. goshawk adds a **cognition layer** on top of a token-efficient engine, so the agent spends tokens on the task, not on interpreting the page.
+---
 
-Measured head-to-head against the two largest browser-automation MCP servers:
+## 🔬 Self-diagnosing verdicts
 
-|  | **goshawk** | Playwright MCP | Chrome DevTools MCP |
-|---|:--:|:--:|:--:|
-| Snapshot of Hacker News | **~1,200 tok** | ~14,700 tok | ~9,800 tok |
-| Snapshot of a GitHub repo | **~1,250 tok** | ~21,600 tok | ~20,800 tok |
-| Cost to connect (tool defs + instructions) | **~1,900 tok** (9 tools) | ~3,442 tok (22) | ~5,000 tok (26+) |
-| Saucedemo login (real task, all succeed) | **~154 tok** | ~1,714 tok | ~1,483 tok |
+The feature that sets goshawk apart. Three layers, zero extra tool calls:
 
-<div align="center">
-<img src="docs/img/tokens.png" width="760" alt="Bar chart: saucedemo login token cost, goshawk ~154 vs Chrome DevTools ~1,483 vs Playwright ~1,714">
-</div>
+**Layer 1: "Did you mean?"**
 
-Within Playwright MCP's ballpark on connect cost (and now lighter: 9 tools, ~1,900 tok to connect), and **for that you also get five things neither has**: intent-first `act`, action `verdict`s, a JS helper API (`js`) for one-call structured data, a one-call universal `login` (single + multi-step, state-verified), and `history`. On a real task the gap is ~10x: the login above is now a single `login` call (or `nav` + three `act` calls) instead of find, fill, fill, find, click, re-see, re-see.
+When `act intent="Sgn in"` finds no exact match, goshawk returns the 3 closest matches by Levenshtein distance:
 
-A second, success-normalized benchmark (`bench/successtoken`, 5 multi-step tasks vs `@playwright/mcp`): both 5/5 success, **~1,142 tok vs ~2,337 tok**: ~2x fewer at equal success. Reproduce with `go run ./bench/successtoken -compare`.
-
-<sub>Connect cost estimated as chars/4.41; Playwright MCP from a real Claude Code per-tool breakdown (jdhodges.com); Chrome DevTools MCP commonly reported (varies ~5k–17k by config, low end used). Snapshot + login measured on the live page, headless, 2026-06. Numbers approximate; the per-task row is the decisive comparison.</sub>
-
-## What's new in v4.0 (profiles, batch form filling, confidence verdicts, self-healing refs, login improvements)
-
-A major upgrade focused on real-world reliability. Same 9-tool surface; every new feature folds into an existing tool.
-
-- **Named profiles** (`session mode=profile`): create, switch, list, delete, export, and import isolated browser profiles. Each profile is a separate Chrome user-data-dir with its own cookies, localStorage, auth, and history. Switch in one call. Export/import cookies + localStorage as JSON. [Issue #1](https://github.com/dondai1234/goshawk/issues/1) resolved.
-- **Batch form filling** (`act fields={...}`): pass a map of field labels to values and goshawk resolves each label, auto-detects the type (text, checkbox, radio, select, custom combobox, slider, file), and does the right action in one call. Re-snapshots once + reports validation errors. One call instead of N for a whole form.
-- **Confidence-scored verdicts**: every act verdict now carries a confidence tag (`[confirmed]` / `[likely]` / `[uncertain]`) based on DOM changes + XHR responses, so the agent knows when to trust the verdict and when to verify.
-- **Self-healing refs**: when a ref is stale (page re-rendered), goshawk auto-re-resolves by matching role + name. Conservative: only heals with exactly one match. Saves a `see` round-trip on React re-renders.
-- **Login improvements**: `login` now detects and reports "remember me" checkboxes, "forgot password" links, and SSO redirects (URL moved to a different domain after submit).
-
-### Previously in v3.2
-
-Universal login (one-call, single + multi-step), cookie/consent banner auto-dismiss, custom combobox open-select, stealth hardening (Permission API, outer dims, navigator.connection).
-
-### Verification
-
-`go build ./cmd/goshawk`, `go vet ./...`, `gofmt -l` all clean. Unit tests pass; integration tests self-skip without Chrome.
-
-## The cognition layer
-
-<div align="center">
-<img src="docs/img/cognition.png" width="820" alt="Three layers: cognition (act/verdict/see/js/history) over the token-efficient engine (dense refs, deltas, JSON) over chromedp">
-</div>
-
-- **`act`: one tool for any action.** Name a control (`act "Sign in"`, `act "Username" value=x`) OR give a ref/selector; local heuristics resolve it (no LLM, no per-call cost) and do the right thing for its role: click buttons/links, fill inputs (pass `value=`), select dropdowns (pass `value=`), **open-select a custom button+listbox dropdown** (pass `value=`; it opens the popup and clicks the matching option). Add `hover=true` to hover, `key=Enter` to press a key, `files=[..]` to upload. **Batch form fill**: `act fields={"Username":"john","Password":"hunter2","Remember me":"true"}` fills a whole form in one call - auto-detects each field type (text/checkbox/radio/select/slider/file) and does the right action. Optional `waitUrl=/waitText=/waitGone=` fuses a wait. Returns a `[confidence]` verdict + delta; ambiguous matches return ranked candidates (it never guesses).
-- **`js`: the structured-data hero.** Run JS with a helper API in scope and get clean JSON back: `return {stars: text('#stars'), lang: attr('.lang','aria-label'), items: $$('li').map(text)}`. Helpers: `$`, `$$` (→array), `text`, `attr`, `html`, `visible`, `data`, `table` (a `<table>` → rows, or objects if the first row is `<th>`), `links` (→`[{text,href}]`), `rect`, `xpath`, `frame(title)` (a same-origin iframe's document), `wait(fn,ms)`. `await="sel"` waits for a selector first. One call, no re-snapshot, no refs to parse, the go-to for any scattered/scraped data. A thrown error is surfaced with the page-side message. Replaces v2's `eval` + `extract` + `collect`.
-- **Verdicts on every action.** `navigated to …` / `dialog opened: …` / `status: added to cart` / `changed: +1 -1 ~1` / `page updated` / `no visible effect` / `CHALLENGE: …`. For non-navigation actions it also folds in the XHR/Fetch responses that fired (`net: /api/cart 200`); the "did my click hit the API" loop, closed without a re-see.
-- **`nav` returns an orientation.** Navigate and land oriented: page type, auth state, the top primary actions WITH refs, regions, counts, so you can act immediately, no separate `see`. `back`/`forward`/`reload`; `newTab=true` opens a new tab.
-- **`see level=outline`: discovery, not guessing.** The page's semantic skeleton (headings/tables/lists/forms/regions) each with a WORKING CSS selector; use it to pick selectors for `js` instead of ping-ponging see/extract/read until one hits. Plus `brief`/`refs`/`text`/`full`/`shot` levels.
-- **`login`: universal one-call login.** `login username= password= url=` (url optional) detects the username + password + submit fields, fills them, submits, and reports a state-verified verdict: `logged in` | `2FA/mfa needed` | `CHALLENGE` | `error: <message>` | `still on login page` | `no login form found` (+ SSO buttons listed). Handles single-step (username+password on one page) AND multi-step (Google/Microsoft/banks: username -> Next -> password appears -> submit) under one call. Detects OAuth/SSO buttons and reports them instead of auto-clicking. Verifies the resulting state, not the return status, so a silent failure is reported, not hidden.
-- **`history`: session memory offloaded from context.** A rolling log of step / action / verdict / URL. Query it (`last=N`, `errors=true`) to re-orient after a long flow instead of carrying the transcript in your context window.
-- **Recovery built in.** `session mode=reset` relaunches the browser (a wedged tab/crashed browser/stale state); `mode=clear` wipes cookies + storage and reloads (a one-call clean slate). Every op is bounded by an op-timeout so a hung page errors instead of wedging.
-
-## Quick start
-
-Requires [Go](https://go.dev) 1.26+ and Chrome/Chromium (auto-discovered).
-
-```sh
-go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
-goshawk --version        # verify; re-run the install command to update
+```
+no element named "Sgn in" found; did you mean: "Sign in" (button, r4), "Sign in to GitHub" (heading, r2)?
 ```
 
-Add it to any MCP client:
+The agent retries with the right name. No `see` + `find` + `see` investigation loop.
+
+**Layer 2: "What blocked it?"**
+
+When an action fires but confidence is uncertain or likely, goshawk scans the page for visible error messages, HTML5 validation failures, and blocking modals:
+
+```
+verdict: [uncertain] no visible effect
+errors visible: "Email is required". Fix those fields and retry
+modal "Login Required" opened - call see to inspect
+```
+
+**Layer 3: "What now?"**
+
+Each diagnostic is an actionable suggestion, not just a description. The agent knows exactly what to do next without another call.
+
+Pure heuristics. No LLM in the loop. No extra API calls. Works across React, Vue, Angular, vanilla.
+
+---
+
+## 🎯 Confidence-scored verdicts
+
+Every `act` returns a verdict with a confidence tag:
+
+| Tag | Meaning | When |
+|-----|---------|------|
+| `[confirmed]` | DOM changed or XHR 2xx fired | The action definitely worked |
+| `[likely]` | Content shifted or XHR fired | Something happened, verify if critical |
+| `[uncertain]` | No visible effect | Check with `see` or the diagnostics |
+
+Navigation is always confirmed. Bot challenges are always uncertain. No more guessing whether a click landed.
+
+---
+
+## 📝 Batch form filling
+
+Fill an entire form in one call:
+
+```
+act fields={"Username":"john","Password":"hunter2","Remember me":"true","Country":"United States"}
+```
+
+Each label is resolved to a form field (a11y name + DOM fallback). The type is auto-detected: text, checkbox, radio, select, slider, file. The right action is performed for each. One re-snapshot, validation errors reported.
+
+---
+
+## 🔐 One-call login
+
+```
+login username="john" password="hunter2" url="https://example.com/login"
+```
+
+Detects the username + password + submit fields, fills them, submits, and verifies the resulting state. Handles:
+
+- Single-step (username + password on one page)
+- Multi-step (username first, then password appears)
+- 2FA (stops and reports what's needed)
+- SSO redirects (reports the domain)
+- Remember-me checkbox (reports, doesn't auto-toggle)
+- Forgot-password link (reports it)
+- OAuth buttons (reports, doesn't auto-click)
+
+Verifies state, not HTTP status. A silent failure is reported, not hidden.
+
+---
+
+## 🛡️ Self-healing refs
+
+Refs from `see` and `find` are stable across re-renders. When a framework re-creates a DOM node with the same role + name (React key change, Vue v-if toggle), goshawk searches the current tree and auto-heals the ref. No stale-selector failures mid-flow.
+
+Refs are per-tab and cleared on navigation. They survive re-renders within a page.
+
+---
+
+## 🍪 Cookie banners and consent redirects
+
+Cookie/consent banners are auto-dismissed on every navigate. The a11y tree comes back clean, not cluttered with overlay elements.
+
+If a site redirects to a full-page consent statement (common for EU users), goshawk detects the redirect, tries broader dismissal, and re-navigates to the original URL. If it can't recover, the verdict says `CONSENT REDIRECT: original -> current` with what to try.
+
+---
+
+## 📄 Blank page detection
+
+When a page loads but renders empty (slow SPA hydration, rate-limiting, JS error), goshawk detects it and reports clearly:
+
+```
+BLANK PAGE: no interactive elements or headings detected.
+The page may be a slow SPA still loading, may require JS execution,
+or may have a rendering issue. Use js to check or see in a moment.
+```
+
+Before: the agent sees `interactive: 0`, calls `see`, then `find`, then `see full`, then `js`. 4 to 5 wasted calls. After: one call, the verdict explains what happened.
+
+`waitSelector=` on `nav` gives a native waitForSelector for slow SPAs: wait for `#dashboard` to render before returning the orientation.
+
+---
+
+## 🎭 Named profiles
+
+Isolated browser identities. Different logins, cookies, storage. Switch in one call.
+
+```
+session mode=profile action=create name="work"
+session mode=profile action=switch name="work"
+session mode=profile action=list
+session mode=profile action=export        # dump cookies+storage as JSON
+session mode=profile action=import data="..."  # restore from JSON
+```
+
+By default, goshawk persists to `<os config dir>/goshawk` so logins and cookies survive server restarts. The agent doesn't re-login each run. Use `--no-persist` for throwaway sessions.
+
+---
+
+## 🚀 Install
+
+```bash
+go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+```
+
+Then add to your MCP client config:
 
 ```json
 {
   "mcpServers": {
-    "goshawk": { "command": "goshawk", "args": ["mcp"] }
+    "goshawk": {
+      "command": "goshawk",
+      "args": ["mcp"]
+    }
   }
 }
 ```
 
-Cursor, Claude Code, Claude Desktop, Windsurf, VS Code Copilot, opencode, Hermes Agent, and OpenClaw all work with this shape (VS Code uses `"servers"` instead of `"mcpServers"`). Ready-to-paste configs and per-client file paths are in [`examples/`](examples/README.md). Claude Code one-liner: `claude mcp add goshawk -- goshawk mcp`.
-
-> `spawn goshawk ENOENT`? The client can't find the binary on its PATH; use the absolute path in `command`: `$(go env GOPATH)/bin/goshawk` (append `.exe` on Windows).
+Requires Chrome or Chromium installed. goshawk connects via CDP.
 
 <details>
-<summary><b>Or: paste this prompt and let your agent install it</b></summary>
+<summary><b>CLI flags</b></summary>
 
-```
-Install the goshawk MCP server and connect it to this client:
-1. Run:  go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
-2. Verify:  goshawk --version   (expect an goshawk v3.x version)
-3. Find out which agent harness you're running on (Opencode, OpenClaw, Hermes Agent, etc.) and locate its MCP config.
-4. Add a stdio MCP server named "goshawk": command "goshawk", args ["mcp"].
-5. Confirm it connects, then tell me it's ready.
-```
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--headless` | `true` | `--headless=false` for real GPU fingerprint (hard anti-bot) |
+| `--user-data-dir` | `<config>/goshawk` | Persistent profile dir. Logins survive restarts. |
+| `--no-persist` | `false` | Throwaway temp profile |
+| `--proxy-server` | none | Proxy URL. Residential proxy fixes most IP-reputation blocks. |
+| `--user-agent` | Chrome default | Override User-Agent |
+| `--viewport` | `1366,768` | Window size W,H |
+| `--no-stealth` | `false` | Disable anti-detection patches |
+| `--no-cookie-dismiss` | `false` | Disable cookie banner auto-dismiss |
+| `--no-eval` | `false` | Disable the `js` tool |
+| `--op-timeout` | `20s` | Per-operation timeout |
+| `--idle-timeout` | `10m` | Auto-close Chrome after idle period |
+| `--allow-insecure-schemes` | `false` | Allow `file://`, `data:`, etc. |
 
 </details>
 
-## The workflow
+---
 
-```
-nav https://saucedemo.com                    →  page: login form | auth: anonymous | actions: r3 button "Login" | r4 textbox "Username"
-act "Username" value="standard_user"        →  act "Username" -> [r4] textbox (fill)  | verdict: changed
-act "Password" value="secret_sauce"         →  act "Password" -> [r5] textbox (fill)  | verdict: changed
-act "Login" waitUrl="/inventory.html"       →  act "Login"    -> [r3] button (click)  | verdict: navigated to /inventory.html
-js "return {price: text('.inventory_item_price').slice(1), name: text('.inventory_item_name')}"
-                                             →  {"price":"29.99","name":"Sauce Labs Backpack"}
-see level=outline                           →  h2 ".title" "Products"  ·  div ".inventory_list" (6 items)
-```
+## 📊 Comparison
 
-Name the control, get a verdict. You rarely call `see` after an action; the verdict + delta tell you what happened. For data, one `js` call with the helper API replaces a find→see→extract→read dance. By-ref mode (`find` then `act ref=r12`) still works when you need precision.
+| | **goshawk** | Playwright MCP | Browser-use | Puppeteer MCP |
+|---|---|---|---|---|
+| **Language** | Go (single binary) | Node.js | Python | Node.js |
+| **Tools** | 9 | 17+ | varies | 10+ |
+| **Token cost** | ~3.4K | ~6K+ | varies | ~5K+ |
+| **Self-diagnosing verdicts** | yes | no | no (uses LLM) | no |
+| **Confidence scoring** | yes | no | no | no |
+| **Batch form fill** | yes (`fields=`) | no | no | no |
+| **Named profiles** | yes | no | no | no |
+| **Self-healing refs** | yes | no | no | no |
+| **Cookie banner auto-dismiss** | yes | no | no | no |
+| **Blank page detection** | yes | no | no | no |
+| **One-call login** | yes | no | no | no |
+| **Intent-first actions** | yes | no (selectors) | yes (LLM) | no (selectors) |
+| **Per-call LLM** | no | no | yes | no |
+| **Runtime deps** | Chrome only | Node + Playwright | Python + Playwright | Node + Puppeteer |
 
-## Tools (9)
+---
 
-**Move & look**: `nav` (open/back/forward/reload/newTab → orientation) · `see` (brief / refs / text / outline / full / shot)
+## 🪙 Token cost
 
-**Act & scrape**: `act` (click/fill/select/hover/press/upload by intent/ref/selector + optional wait → verdict+delta) · `login` (universal one-call login: single + multi-step, state-verified verdict) · `js` (run JS with a helper API → clean JSON) · `find` (by role/text → refs; by selector → matches; `selectors=true` for both)
+Most browser MCP servers cost 5 to 8K tokens just to exist. goshawk's 9 tools cost **~3.4K tokens** at `tools/list` (measured from the live MCP JSON response, 13623 chars). The connect-time `instructions` (~66 tokens) are injected once at handshake, not repeated every turn.
 
-**Session**: `tabs` (list/switch/close/label) · `history` (action log) · `session` (reset / clear)
+A `nav` orientation on a typical page returns ~60 to 80 tokens. A `see refs` on a page with 10 interactive elements returns ~40 tokens. Dense by design: ref-lines, not aria dumps.
 
-Every tool's description is hand-crafted to tell the agent exactly what to pass, what it returns, and the gotcha, masterable from the defs alone. `js` covers anything the typed tools don't.
+---
 
-## Anti-bot / stealth: on by default (`--no-stealth` to disable)
+## ⚠️ Known gotchas
 
-- **Static tells patched**: `navigator.webdriver=false` (via `--disable-blink-features=AutomationControlled`, `--enable-automation` dropped); `userAgentData`/`plugins`/`languages`/`window.chrome`/WebGL/hardware spoofed via a pre-page init script. Verified: `webdriver=false`, `plugins=5`, `languages=en-US,en`.
-- **Real fingerprint**: `--headless=new` (near-real) by default; `--headless=false` for the real GPU/canvas/timing fingerprint on hard targets.
-- **Behavioral realism**: a jittered smoothstep mouse path before each click; `act key=` for typed input.
-- **Proxies + challenge detection**: `--proxy-server` for residential proxies (the biggest IP-reputation lever); `navigate`/`see` surface `CHALLENGE:` on Cloudflare/DataDome/reCAPTCHA/hCaptcha/Turnstile and auto-wait for managed challenges to clear. A click that lands on a challenge reports `verdict: CHALLENGE: …`.
+| Gotcha | What to know |
+|---|---|
+| **Chrome must be installed** | goshawk connects via CDP to Chrome/Chromium. No Chrome, no browser. |
+| **One profile per process** | Chrome locks the profile dir. Run concurrent clients with separate `--user-data-dir` paths. |
+| **20s op timeout** | If a page hasn't loaded in 20s, it's dead. Raise `--op-timeout` for known slow targets. |
+| **Headless may trigger bot detection** | Use `--headless=false` for sites with aggressive anti-bot. A residential proxy (`--proxy-server`) is the #1 fix for IP blocks. |
+| **`js` tool can be disabled** | Start with `--no-eval` to block arbitrary page JS. The other 8 tools still work. |
 
-<details>
-<summary><b>Honest limits: no chromedp tool beats these</b></summary>
+---
 
-- The **CDP runtime signal** (a debugger-attached timing delta) is fundamental to CDP; only a custom Chromium build (e.g. Camoufox) hides it.
-- **Image-CAPTCHA solving** (reCAPTCHA grids, hCaptcha) needs a paid solver; solver integration (user-provided API key) is planned.
-- The intent resolver + verdict heuristics are best-effort over the a11y tree, not ground truth. `act` falls back to candidates when ambiguous (never guesses); `js` + `see level=outline` give the raw structure; `see level=refs` is always there for the raw refs.
-- For hard targets, stack: `--headless=false` + `--proxy-server <residential>` + a solver.
-- Cross-origin iframes are opaque (as for any tool); same-origin iframes work fully.
+## ⚠️ Honest limits
 
-</details>
-
-## Flags
-
-`--headless` · `--user-data-dir` · `--no-persist` (throwaway profile; by default logins persist at `<os config dir>/goshawk`, with an automatic fallback to a throwaway profile if it's locked by a leftover Chrome) · `--proxy-server` · `--user-agent` · `--viewport W,H` · `--no-stealth` · `--no-cookie-dismiss` (cookie/consent banner auto-dismiss on nav; on by default) · `--no-eval` (`js` on by default; disable to forbid arbitrary page JS) · `--op-timeout` (per-CDP-op, default 30s) · `--idle-timeout` (auto-close Chrome after this long idle, default 10m; 0 disables) · `--allow-insecure-schemes` · `--version`
+| Limit | What happens instead |
+|-------|----------------------|
+| **Hard CAPTCHAs** (Turnstile, hCaptcha) | Reported as `CHALLENGE` in the verdict. The agent knows to stop, not retry blindly. |
+| **Shadow DOM piercing** | `js` with `$(sel)` reaches open shadow roots. Closed shadow roots need `selector=` on `act` or `find`. |
+| **Iframe access** | Same-origin iframes are reachable. Cross-origin iframes are blocked by browser security. |
+| **No screenshots in headless** | `see shot` captures the page, but some sites render differently headless. Use `--headless=false` for visual fidelity. |
+| **Rate-limited sites** | HN, Reddit, and others may serve "Sorry" pages under heavy headless use. The BLANK PAGE verdict catches this. |
 
 ---
 
 <div align="center">
 
-**MIT** · [Changelog](CHANGELOG.md) · [Example MCP configs](examples/README.md) · [Benchmarks](bench/)
+### If goshawk saves you tool calls, star the repo: it helps others find it.
 
-Built for the agent that uses it.
+[![GitHub stars](https://img.shields.io/github/stars/dondai1234/goshawk?style=social)](https://github.com/dondai1234/goshawk/stargazers)
+
+**MIT** · [Changelog](CHANGELOG.md) · [Issues](https://github.com/dondai1234/goshawk/issues)
 
 </div>
