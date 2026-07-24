@@ -264,6 +264,18 @@ func (s *Session) finishMutationLocked(t *tab, before *snapshot.Tree, startTs ti
 		// Navigation is always confirmed (the URL changed).
 		d.Confidence = "confirmed"
 	}
+	// Self-Diagnosing Verdicts: when the action didn't clearly succeed, run a
+	// lightweight DOM diagnostic (visible errors, HTML5 validation, CSS modals)
+	// and append an actionable suggestion to the verdict. This eliminates the
+	// investigation loop: the agent knows WHY the action failed and WHAT to do
+	// next, without calling see/find/js. Skips on confirmed actions (zero
+	// overhead for successful actions) and on challenges (the verdict is the
+	// block, not the diagnostic).
+	if d.Confidence != "confirmed" && d.Confidence != "" && !strings.HasPrefix(d.Verdict, "CHALLENGE:") {
+		if diag := s.runActionDiagnosticsLocked(t); diag != "" {
+			d.Verdict += "; " + diag
+		}
+	}
 	url := ""
 	if after != nil {
 		url = after.URL

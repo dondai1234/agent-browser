@@ -167,6 +167,10 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 		scored = append(scored, scoredEl{el, sc})
 	}
 	if len(scored) == 0 {
+		hint := closestMatches(tree, intent, 3)
+		if hint != "" {
+			return snapshot.Element{}, nil, fmt.Errorf("no element named %q found; %s", intent, hint)
+		}
 		return snapshot.Element{}, nil, fmt.Errorf("no element named %q found; use see/find to check the page", intent)
 	}
 	sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
