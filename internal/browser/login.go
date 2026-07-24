@@ -271,7 +271,7 @@ func (s *Session) Login(a LoginArgs) (*LoginResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cleanURL != "" {
-		tree, err := s.navigateLocked(cleanURL)
+		tree, err := s.navigateLocked(cleanURL, "")
 		if err != nil {
 			return nil, err
 		}

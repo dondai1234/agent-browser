@@ -55,6 +55,7 @@ type Tree struct {
 	Title     string
 	Challenge string // bot-check interstitial detected (Cloudflare/captcha); surfaced in minimal
 	Overlay   string // cookie/consent banner auto-dismissed on navigate (label, e.g. "rejected cookies (onetrust)"); surfaced in minimal/brief
+	Note      string // nav-level note (blank page, consent redirect, etc.); surfaced in minimal/brief
 	Text      string // visible page text (set by Session.FillText for the full level)
 	Nodes     []*accessibility.Node
 	Elems     []Element // interactive + heading elements, in tree order
@@ -266,6 +267,9 @@ func (t *Tree) renderMinimal() string {
 	if t.Overlay != "" {
 		fmt.Fprintf(&b, "consent: %s (auto-dismissed)\n", t.Overlay)
 	}
+	if t.Note != "" {
+		fmt.Fprintf(&b, "%s\n", t.Note)
+	}
 	if len(t.Landmarks) > 0 {
 		roles := make([]string, 0, len(t.Landmarks))
 		for _, l := range t.Landmarks {
@@ -348,6 +352,9 @@ func (t *Tree) renderBrief() string {
 	}
 	if t.Overlay != "" {
 		fmt.Fprintf(&b, "consent: %s (auto-dismissed)\n", t.Overlay)
+	}
+	if t.Note != "" {
+		fmt.Fprintf(&b, "%s\n", t.Note)
 	}
 	fmt.Fprintf(&b, "page: %s\n", t.PageType())
 	fmt.Fprintf(&b, "auth: %s\n", t.AuthState())

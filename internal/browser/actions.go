@@ -38,20 +38,23 @@ func (s *Session) tabURLLocked(t *tab) string {
 }
 
 // NavigateAndSee navigates the current tab and returns its new tree. Atomic.
-func (s *Session) NavigateAndSee(raw string) (*snapshot.Tree, error) {
+// waitSelector (optional, "") waits for a CSS selector to appear before
+// building the tree (native waitForSelector pattern for slow SPAs).
+func (s *Session) NavigateAndSee(raw string, waitSelector string) (*snapshot.Tree, error) {
 	clean, err := ValidateURL(raw, s.AllowInsecureSchemes)
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.navigateLocked(clean)
+	return s.navigateLocked(clean, waitSelector)
 }
 
 // navigateLocked is the lock-held core of NavigateAndSee (so a caller that
 // already holds s.mu - e.g. Login - can navigate without a re-entrant lock
-// deadlock). `clean` must already be a validated URL. Caller must hold s.mu.
-func (s *Session) navigateLocked(clean string) (*snapshot.Tree, error) {
+// deadlock). `clean` must already be a validated URL. `waitSelector` ("") waits
+// for a CSS selector to appear before building the tree. Caller must hold s.mu.
+func (s *Session) navigateLocked(clean string, waitSelector string) (*snapshot.Tree, error) {
 	if err := s.ensureBrowserLocked(); err != nil {
 		return nil, err
 	}
@@ -65,6 +68,12 @@ func (s *Session) navigateLocked(clean string) (*snapshot.Tree, error) {
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	); err != nil {
 		return nil, fmt.Errorf("navigate: %w", err)
+	}
+	// If waitSelector was provided, wait for it to appear (native waitForSelector
+	// pattern). Bounded by op timeout via runTimeout. If it times out, proceed
+	// anyway - the verdict will report the page state.
+	if waitSelector != "" {
+		_ = s.waitForSelectorLocked(t, waitSelector, 10*time.Second)
 	}
 	if err := s.buildTreeLocked(); err != nil {
 		return nil, err
@@ -169,7 +178,25 @@ func (s *Session) navigateLocked(clean string) (*snapshot.Tree, error) {
 	if cur.tree.Challenge != "" {
 		navVerdict = "CHALLENGE: " + cur.tree.Challenge
 	} else if isConsentRedirect(clean, cur.tree.URL) {
-		navVerdict = fmt.Sprintf("CONSENT REDIRECT: %s -> %s (auto-dismiss did not complete the consent flow; try act intent=\"Accept\" to click the consent button manually, or js to set the consent cookie)", clean, cur.tree.URL)
+		consentMsg := fmt.Sprintf("CONSENT REDIRECT: %s -> %s (auto-dismiss did not complete the consent flow; try act intent=\"Accept\" to click the consent button manually, or js to set the consent cookie)", clean, cur.tree.URL)
+		navVerdict = consentMsg
+		cur.tree.Note = consentMsg
+		if overlayVerdict != "" {
+			navVerdict += "; " + overlayVerdict
+		}
+	} else if len(cur.tree.Elems) == 0 && len(cur.tree.Headings) == 0 {
+		// Blank page: the page loaded but no interactive elements or headings
+		// were found. This is the blank-white-page problem: the page may be a
+		// slow-loading SPA that hasn't hydrated yet, may require JavaScript, or
+		// may have a rendering issue. Report clearly so the agent doesn't waste
+		// 4-5 tool calls investigating (see -> find -> see full -> js).
+		blankMsg := "BLANK PAGE: no interactive elements or headings detected. The page may be a slow SPA still loading (try nav again in a few seconds), may require JS execution, or may have a rendering issue. Use js to check document.body content or see in a moment."
+		navVerdict = fmt.Sprintf("navigated to %s", cur.tree.URL)
+		if cur.tree.Title != "" {
+			navVerdict += fmt.Sprintf(" %q", cur.tree.Title)
+		}
+		navVerdict += "; " + blankMsg
+		cur.tree.Note = blankMsg
 		if overlayVerdict != "" {
 			navVerdict += "; " + overlayVerdict
 		}

@@ -7,6 +7,7 @@ package browser
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -138,7 +139,7 @@ type Session struct {
 // call holds the session mutex forever and EVERY tool then blocks on the lock
 // until the MCP client times out - the "session hung, all tools timed out"
 // failure. The bound turns a wedge into a normal error the agent can reset from.
-const opTimeoutDefault = 30 * time.Second
+const opTimeoutDefault = 45 * time.Second
 
 // axPollTimeout bounds each accessibility-tree pull (GetFullAXTree + the iframe
 // merge). AX pulls are fast on a live page; a pull that takes longer is almost
@@ -584,9 +585,11 @@ func (s *Session) buildTreeLocked() error {
 	if err == nil && s.treeLooksEmptyLocked(t) {
 		// The pull succeeded but returned a near-empty tree on a still-loading
 		// page (the rare case where readyState hit 'complete' but the AX tree
-		// hadn't caught up, or a late JS hydration). Retry once after a settle
-		// so nav never hands the agent an empty `see refs`.
-		time.Sleep(450 * time.Millisecond)
+		// hadn't caught up, or a late JS hydration). Wait for content to
+		// appear (polls the DOM for visible text or interactive elements up to
+		// 5s), then re-pull. This replaces the old single 450ms retry which
+		// was too short for slow SPAs (HN login, React hydration, etc.).
+		s.waitForContentLocked(t, 5*time.Second)
 		err = s.pullAXLocked(t)
 	}
 	if err == nil {
@@ -614,6 +617,64 @@ func (s *Session) treeLooksEmptyLocked(t *tab) bool {
 		return false
 	}
 	return len(t.tree.Elems) == 0 && len(t.tree.Headings) == 0
+}
+
+// waitForContentLocked polls the DOM for visible content (body text or
+// interactive elements) until content appears or max elapses. Used after nav
+// to handle slow SPAs where readyState='complete' fires before JS hydration
+// renders the actual content (the blank-white-page problem). Returns as soon
+// as content is detected; non-fatal if it times out (the caller proceeds with
+// whatever tree it gets and the verdict reports the blank page). One cheap
+// eval per tick. Caller must hold s.mu.
+func (s *Session) waitForContentLocked(t *tab, max time.Duration) {
+	if t == nil {
+		return
+	}
+	deadline := time.Now().Add(max)
+	check := `(() => {
+		var text = (document.body && document.body.innerText || '').replace(/\s+/g, '').length;
+		var interactive = document.querySelectorAll('input, button, a[href], [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], select, textarea').length;
+		return text > 5 || interactive > 0;
+	})()`
+	for {
+		var hasContent bool
+		if err := s.runTimeout(t, 3*time.Second, chromedp.Evaluate(check, &hasContent)); err != nil {
+			return
+		}
+		if hasContent {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// waitForSelectorLocked polls the DOM for a CSS selector to appear (visible)
+// until it appears or max elapses. Used by nav waitSelector= to implement a
+// native waitForSelector pattern. Returns nil if found, error if timeout.
+// Caller must hold s.mu.
+func (s *Session) waitForSelectorLocked(t *tab, selector string, max time.Duration) error {
+	if t == nil || selector == "" {
+		return nil
+	}
+	deadline := time.Now().Add(max)
+	selJSON, _ := json.Marshal(selector)
+	check := `(function(){ try { var el = document.querySelector(` + string(selJSON) + `); return el && el.offsetParent !== null; } catch(e) { return false; } })()`
+	for {
+		var found bool
+		if err := s.runTimeout(t, 3*time.Second, chromedp.Evaluate(check, &found)); err != nil {
+			return fmt.Errorf("waitSelector %q: %w", selector, err)
+		}
+		if found {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("waitSelector %q: not found after %v", selector, max)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 // waitReadyCompleteLocked polls document.readyState until 'complete' or max,

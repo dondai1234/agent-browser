@@ -13,15 +13,16 @@ import (
 
 func registerNav(srv *mcp.Server, sess *browser.Session) {
 	type args struct {
-		Action string `json:"action,omitempty" jsonschema:"open (default: navigate to url) | back | forward | reload"`
-		URL    string `json:"url,omitempty" jsonschema:"URL to open (action=open; http/https only; other schemes blocked unless --allow-insecure-schemes). Required for open and for newTab."`
-		NewTab bool   `json:"newTab,omitempty" jsonschema:"open url in a new tab (makes it current); requires url. back/forward/reload ignore this."`
-		Label  string `json:"label,omitempty" jsonschema:"optional memorable label for a new tab (e.g. \"admin\")"`
-		Level  string `json:"level,omitempty" jsonschema:"orientation detail to return: brief (default: page type + auth + primary actions with refs + regions + counts) | minimal (url/title/landmarks/headings/counts) | refs (interactive list with refs) | full (refs + visible text)"`
+		Action       string `json:"action,omitempty" jsonschema:"open (default: navigate to url) | back | forward | reload"`
+		URL          string `json:"url,omitempty" jsonschema:"URL to open (action=open; http/https only; other schemes blocked unless --allow-insecure-schemes). Required for open and for newTab."`
+		NewTab       bool   `json:"newTab,omitempty" jsonschema:"open url in a new tab (makes it current); requires url. back/forward/reload ignore this."`
+		Label        string `json:"label,omitempty" jsonschema:"optional memorable label for a new tab (e.g. \"admin\")"`
+		WaitSelector string `json:"waitSelector,omitempty" jsonschema:"CSS selector to wait for before building the tree (native waitForSelector for slow SPAs). e.g. \"input[name=email]\" or \"#content\". Times out after 10s. Only for action=open."`
+		Level        string `json:"level,omitempty" jsonschema:"orientation detail to return: brief (default: page type + auth + primary actions with refs + regions + counts) | minimal (url/title/landmarks/headings/counts) | refs (interactive list with refs) | full (refs + visible text)"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "nav",
-		Description: "Navigate and return an orientation, so you can act immediately without a separate see. action=open (default) opens url on the current tab; back/forward traverse browser history; reload re-fetches the current page. newTab=true opens url in a new tab (makes it current; pass label= to name it). back/forward with no history is a no-op (returns the current page). Default level=brief: page type, auth state, the top primary actions WITH refs (e.g. 'r3 button \"Login\"'), regions, interactive counts - act from here. Use level=refs for the full interactive list, level=full to also see text. Every nav detects bot-check interstitials (Cloudflare/captcha) and surfaces CHALLENGE:.",
+		Description: "Navigate and return an orientation, so you can act immediately without a separate see. action=open (default) opens url on the current tab; back/forward traverse browser history; reload re-fetches the current page. newTab=true opens url in a new tab (makes it current; pass label= to name it). back/forward with no history is a no-op (returns the current page). waitSelector= waits for a CSS selector to appear before building the tree (native waitForSelector for slow SPAs, e.g. waitSelector=\"#content\" or \"input[name=email]\"; times out after 10s). Default level=brief: page type, auth state, the top primary actions WITH refs (e.g. 'r3 button \"Login\"'), regions, interactive counts - act from here. Use level=refs for the full interactive list, level=full to also see text. Every nav detects bot-check interstitials (Cloudflare/captcha) and surfaces CHALLENGE:. Blank pages (no interactive elements) are detected and reported clearly as BLANK PAGE.",
 		Annotations: openWorld(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 		action := strings.ToLower(strings.TrimSpace(a.Action))
@@ -39,7 +40,7 @@ func registerNav(srv *mcp.Server, sess *browser.Session) {
 					_ = sess.SetTabLabel(a.Label)
 				}
 			} else {
-				tree, err = sess.NavigateAndSee(a.URL)
+				tree, err = sess.NavigateAndSee(a.URL, a.WaitSelector)
 			}
 		case "back", "forward", "reload":
 			tree, err = sess.NavigateAction(action)
