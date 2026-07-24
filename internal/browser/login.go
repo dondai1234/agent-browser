@@ -397,10 +397,18 @@ func (s *Session) Login(a LoginArgs) (*LoginResult, error) {
 		res.Verdict = "2FA/mfa needed: a verification code field is present - call see to read it, then act to enter the code"
 	case final.Error != "":
 		res.Verdict = "error: " + final.Error
-	case final.LoginGone && (final.Account || loginURLChanged(startURL, final.URL)):
+	case final.LoginGone && final.Account:
+		// Server-side verified: account indicators (logout/profile/dashboard
+		// links) are present. The login form is gone AND we can see
+		// logged-in UI elements - high confidence.
 		res.Verdict = "logged in"
+	case final.LoginGone && loginURLChanged(startURL, final.URL):
+		// URL changed + form gone, but NO account indicators found.
+		// Some sites redirect to a session/error page even with bad
+		// credentials. Don't claim success without server-side proof.
+		res.Verdict = "likely logged in (URL changed, form gone; call see to confirm - no account indicators detected)"
 	case final.LoginGone:
-		res.Verdict = "logged in (login form gone; call see to confirm)"
+		res.Verdict = "login form gone but no account indicators found; call see to confirm"
 	default:
 		res.Verdict = "still on login page: the form is still present - call see to check for an error or a missed step"
 	}

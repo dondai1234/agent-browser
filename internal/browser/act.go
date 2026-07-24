@@ -136,7 +136,7 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 		if hasValue && nth == 0 && !isFillableRole(el.Role) && el.Role != "combobox" {
 			continue
 		}
-		name := strings.ToLower(el.Name)
+		name := strings.TrimSpace(strings.ToLower(el.Name))
 		matched := name != "" && strings.Contains(name, needle)
 		// A custom combobox (button+listbox) often has no accessible NAME - Chrome
 		// puts its visible label/selection in the VALUE (e.g. combobox ="Select a
@@ -203,6 +203,64 @@ func resolveIntent(tree *snapshot.Tree, intent, value, role string, nth int) (sn
 	return snapshot.Element{}, cands, errAmbiguous
 }
 
+// pickMostVisibleLocked resolves each candidate element to a DOM node via CDP,
+// checks its bounding rect, and returns the most visible one (largest rendered
+// area). Used to auto-disambiguate when resolveIntent returns multiple matches
+// with the same score: instead of forcing the agent to disambiguate manually,
+// pick the element that's actually visible and prominent on the page. Returns
+// an error if no candidate is visible (all hidden/off-screen). Caller must hold
+// s.mu.
+func (s *Session) pickMostVisibleLocked(t *tab, candidates []snapshot.Element) (snapshot.Element, error) {
+	if len(candidates) == 0 {
+		return snapshot.Element{}, errors.New("no candidates")
+	}
+	type rect struct {
+		X       float64 `json:"x"`
+		Y       float64 `json:"y"`
+		W       float64 `json:"w"`
+		H       float64 `json:"h"`
+		Area    float64
+		Visible bool
+	}
+	var best *rect
+	var bestEl *snapshot.Element
+	for i := range candidates {
+		el := &candidates[i]
+		if el.Backend == 0 {
+			continue
+		}
+		var r rect
+		err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+			id, e := s.resolveBackendLocked(ctx, el.Backend, el.Ref)
+			if e != nil {
+				return e
+			}
+			res, _, e := runtime.CallFunctionOn(`function(){ var r = this.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }`).
+				WithReturnByValue(true).WithObjectID(id).Do(ctx)
+			if e != nil {
+				return e
+			}
+			if res != nil && len(res.Value) > 0 {
+				_ = json.Unmarshal(res.Value, &r)
+			}
+			return nil
+		}))
+		if err != nil || r.W <= 1 || r.H <= 1 {
+			continue // hidden or zero-size
+		}
+		r.Area = r.W * r.H
+		r.Visible = true
+		if best == nil || r.Area > best.Area {
+			best = &r
+			bestEl = el
+		}
+	}
+	if bestEl == nil {
+		return snapshot.Element{}, errors.New("ambiguous: no candidate is visible")
+	}
+	return *bestEl, nil
+}
+
 // Act resolves `intent` to a control on the current page and performs the
 // default action for its role: click for buttons/links/menuitems/tabs/checkboxes
 // etc., fill (with value) for textbox/searchbox/spinbutton, select (with value)
@@ -253,11 +311,22 @@ func (s *Session) Act(intent, value, role string, nth int, settle time.Duration)
 				// Ambiguous, or nth out of range - surface the ranked candidates.
 				return &ActResult{CandidatesText: renderDOMCandidates(domCands)}, domErr
 			}
+		} else {
+			// Ambiguous a11y match: try auto-picking the most visible candidate
+			// before falling back to the manual disambiguation error. This handles
+			// the common case where one candidate is hidden/off-screen and only
+			// one is actually visible (e.g. a dropdown menu's items overlap with
+			// a hidden duplicate).
+			if picked, perr := s.pickMostVisibleLocked(t, candidates); perr == nil {
+				resolved = picked
+				goto actOnResolved
+			}
 		}
 		s.recordActionErrorLocked(before, fmt.Sprintf("act %q", intent), rerr)
 		return &ActResult{Candidates: candidates}, rerr
 	}
 
+actOnResolved:
 	verb := "click"
 	var actErr error
 	// resolveRefLocked + the node action must run inside chromedp.Run so the ctx
@@ -403,12 +472,12 @@ const intentDOMJS = `(function(){
         else if(keys[k]==='name') av=el.name||'';
         else if(keys[k]==='id') av=el.id||'';
         else av=el.title||'';
-        var lv=(av||'').toLowerCase();
+        var lv=(av||'').toLowerCase().trim();
         if(lv && lv.indexOf(needle)>=0){ best=av; bestAttr=keys[k]; break; }
       }
       if(!best){ var txt=(el.textContent||'').trim(); if(txt && txt.toLowerCase().indexOf(needle)>=0){ best=txt; bestAttr='text'; } }
       if(!best) continue;
-      var bl=best.toLowerCase(); var sc=10; if(bl===needle) sc=100; else if(bl.indexOf(needle)===0) sc=50;
+      var bl=best.toLowerCase().trim(); var sc=10; if(bl===needle) sc=100; else if(bl.indexOf(needle)===0) sc=50;
       // Role-aware boost: when the agent passed a value it wants to FILL, prefer
       // text inputs/textareas/selects; when no value it wants to CLICK, prefer
       // buttons/links. This stops a value-bearing "Search" intent from landing

@@ -157,6 +157,23 @@ func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormF
 					time.Sleep(settle)
 					continue
 				} else if len(radioCands) > 0 {
+					// Ambiguous radio match: try auto-picking the most visible candidate.
+					if picked, perr := s.pickMostVisibleLocked(t, radioCands); perr == nil {
+						if err := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
+							id, e := s.resolveRefLocked(ctx, picked.Ref)
+							if e != nil {
+								return e
+							}
+							return s.clickNodeLocked(ctx, id)
+						})); err != nil {
+							result.Errors = append(result.Errors, fmt.Sprintf("%q (radio %q): %v", label, value, err))
+							lastErr = err.Error()
+						} else {
+							result.Filled++
+						}
+						time.Sleep(settle)
+						continue
+					}
 					result.Errors = append(result.Errors, fmt.Sprintf("%q: ambiguous radio match for %q (%d options)", label, value, len(radioCands)))
 					lastErr = "ambiguous"
 				} else {
@@ -165,12 +182,18 @@ func (s *Session) formFillLocked(fields map[string]string, settleMs int) (*FormF
 				}
 				continue
 			}
-			// Ambiguous: report candidates.
+			// Ambiguous: try auto-picking the most visible candidate before
+			// falling back to the manual disambiguation error.
+			if picked, perr := s.pickMostVisibleLocked(t, candidates); perr == nil {
+				resolved = picked
+				goto fieldResolved
+			}
 			result.Errors = append(result.Errors, fmt.Sprintf("%q: %v (%d candidates)", label, rerr, len(candidates)))
 			lastErr = rerr.Error()
 			continue
 		}
 
+	fieldResolved:
 		// 2. Perform the action based on the resolved element's role + tag/type.
 		actErr := s.run(t, chromedp.ActionFunc(func(ctx context.Context) error {
 			id, e := s.resolveRefLocked(ctx, resolved.Ref)
