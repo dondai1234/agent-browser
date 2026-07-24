@@ -10,7 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/goshawk/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v4/internal/browser"
 )
 
 // Version is the server version reported to MCP clients.

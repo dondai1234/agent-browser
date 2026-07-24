@@ -8,7 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/goshawk/v3/internal/browser"
+	"github.com/dondai1234/goshawk/v4/internal/browser"
 )
 
 func registerTabs(srv *mcp.Server, sess *browser.Session) {

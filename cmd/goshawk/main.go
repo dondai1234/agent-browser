@@ -28,9 +28,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dondai1234/goshawk/v3/internal/browser"
-	"github.com/dondai1234/goshawk/v3/internal/mcpserver"
-	"github.com/dondai1234/goshawk/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v4/internal/browser"
+	"github.com/dondai1234/goshawk/v4/internal/mcpserver"
+	"github.com/dondai1234/goshawk/v4/internal/snapshot"
 )
 
 // version is the build version. Overridden at release-build time via

@@ -10,7 +10,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/go-json-experiment/json/jsontext"
 
-	"github.com/dondai1234/goshawk/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v4/internal/snapshot"
 )
 
 // openSelectComboboxJS is the in-page dance for a button+listbox dropdown (the

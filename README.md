@@ -13,7 +13,7 @@ Built on Chrome DevTools Protocol + MCP. Works with Claude Code, Cursor, OpenCod
 [![GitHub stars](https://img.shields.io/github/stars/dondai1234/goshawk?style=social)](https://github.com/dondai1234/goshawk/stargazers)
 
 ```bash
-go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+go install github.com/dondai1234/goshawk/v4/cmd/goshawk@latest
 ```
 
 [Install](#-install) · [The 9 tools](#-the-9-tools) · [Self-diagnosing verdicts](#-self-diagnosing-verdicts) · [Comparison](#-comparison) · [Token cost](#-token-cost) · [Honest limits](#-honest-limits)
@@ -185,7 +185,7 @@ By default, goshawk persists to `<os config dir>/goshawk` so logins and cookies 
 ## 🚀 Install
 
 ```bash
-go install github.com/dondai1234/goshawk/v3/cmd/goshawk@latest
+go install github.com/dondai1234/goshawk/v4/cmd/goshawk@latest
 ```
 
 Then add to your MCP client config:

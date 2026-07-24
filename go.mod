@@ -1,4 +1,4 @@
-module github.com/dondai1234/goshawk/v3
+module github.com/dondai1234/goshawk/v4
 
 go 1.26.4
 

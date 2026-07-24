@@ -10,7 +10,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/dondai1234/goshawk/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v4/internal/snapshot"
 )
 
 // findSelectorJS runs querySelectorAll(selector) on the top document and returns

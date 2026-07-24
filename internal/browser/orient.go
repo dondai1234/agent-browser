@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dondai1234/goshawk/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v4/internal/snapshot"
 )
 
 // defaultSettle is how long an act-and-see action waits for the DOM to settle

@@ -13,7 +13,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/go-json-experiment/json/jsontext"
 
-	"github.com/dondai1234/goshawk/v3/internal/snapshot"
+	"github.com/dondai1234/goshawk/v4/internal/snapshot"
 )
 
 // FormFillResult holds the outcome of a batch form fill.
