@@ -16,7 +16,7 @@ Built on Chrome DevTools Protocol + MCP. Works with Claude Code, Cursor, OpenCod
 go install github.com/dondai1234/goshawk/v4/cmd/goshawk@latest
 ```
 
-[Install](#-install) · [The 9 tools](#-the-9-tools) · [Self-diagnosing verdicts](#-self-diagnosing-verdicts) · [Comparison](#-comparison) · [Token cost](#-token-cost) · [Honest limits](#-honest-limits)
+[Install](#-install) · [The 9 tools](#-the-9-tools) · [Self-diagnosing verdicts](#-self-diagnosing-verdicts) · [Comparison](#-comparison) · [Token cost](#-token-cost) · [What goshawk can't do](#-what-goshawk-cant-do)
 
 </div>
 
@@ -254,9 +254,9 @@ A `nav` orientation on a typical page returns ~60 to 80 tokens. A `see refs` on 
 
 ---
 
-## ⚠️ Known gotchas
+## 🔧 Things to know first
 
-| Gotcha | What to know |
+| Thing | What to know |
 |---|---|
 | **Chrome must be installed** | goshawk connects via CDP to Chrome/Chromium. No Chrome, no browser. |
 | **One profile per process** | Chrome locks the profile dir. Run concurrent clients with separate `--user-data-dir` paths. |
@@ -266,7 +266,7 @@ A `nav` orientation on a typical page returns ~60 to 80 tokens. A `see refs` on 
 
 ---
 
-## ⚠️ Honest limits
+## 🚧 What goshawk can't do
 
 | Limit | What happens instead |
 |-------|----------------------|
